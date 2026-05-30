@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Warehouse Test</title>
+    <link rel="stylesheet" href="/test_warehouse/test_warehouse.css" />
+  </head>
+  <body>
+    <main>
+      <aside class="controls">
+        <button id="generateButton">生成战利品仓</button>
+        <div id="kInfo"></div>
+        <label><input id="animateToggle" type="checkbox" /> 播放结算动画</label>
+        <div class="value-line">当前揭示价值 <strong id="revealedValue">0</strong></div>
+        <pre id="stats"></pre>
+      </aside>
+      <section class="warehouse-scroll">
+        <canvas id="warehouseCanvas"></canvas>
+        <div class="canvas-tooltip" id="canvasTooltip" hidden></div>
+      </section>
+    </main>
+    <script type="module" src="/test_warehouse/test_warehouse.js"></script>
+  </body>
+</html>

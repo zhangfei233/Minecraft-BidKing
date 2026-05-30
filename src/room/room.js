@@ -1,0 +1,503 @@
+import fs from "node:fs";
+import path from "node:path";
+import { loadDefinitions } from "../game/definitions.js";
+import { validateSelections } from "../game/GameSession.js";
+import { loadItemsById } from "../items/items.js";
+import {
+  buyProfileProps,
+  deductMoney,
+  ensureProfile,
+  saveProfileByNickname,
+  sellProfileItems,
+  toggleFavorite,
+} from "../player/profile.js";
+import { acceptWebSocket, decodeWsText, sendWsJson } from "../net/websocket.js";
+
+const MAX_PLAYERS = 4;
+const HEARTBEAT_TIMEOUT_MS = 20_000;
+
+export function createRoom({ rootDir, onGameStart }) {
+  const players = new Map();
+  const disconnectedPlayers = new Map();
+  const characterDefinitions = loadDefinitions(rootDir, "characters.csv");
+  const propDefinitions = loadDefinitions(rootDir, "props.csv");
+  const itemsById = loadItemsById(rootDir);
+  const containers = loadContainers(rootDir);
+  let currentContainer = pickContainer(containers);
+  let gameInProgress = false;
+
+  const heartbeatTimer = setInterval(() => {
+    const now = Date.now();
+    for (const player of players.values()) {
+      if (!player.inGame && !player.sideConnections && now - player.lastSeen > HEARTBEAT_TIMEOUT_MS) removePlayer(player.id);
+    }
+    for (const [id, player] of disconnectedPlayers) {
+      if (now - player.lastSeen > 120_000) disconnectedPlayers.delete(id);
+    }
+  }, 15_000);
+  heartbeatTimer.unref?.();
+
+  function handleUpgrade(req, socket, requestUrl) {
+    if (requestUrl.pathname !== "/room-ws") return false;
+    if (!acceptWebSocket(req, socket)) return true;
+
+    const resumeId = requestUrl.searchParams.get("playerId");
+    if (resumeId) {
+      let player = players.get(resumeId);
+      if (!player && disconnectedPlayers.has(resumeId) && players.size < MAX_PLAYERS) {
+        player = disconnectedPlayers.get(resumeId);
+        disconnectedPlayers.delete(resumeId);
+        player.socket = socket;
+        player.inGame = false;
+        player.sideConnections = 0;
+        players.set(player.id, player);
+      }
+      if (!player) return reject(socket, "房间中没有这个玩家，请重新输入昵称");
+      player.ready = false;
+      return attachExistingPlayer(player, socket);
+    }
+
+    const nickname = normalizeNickname(requestUrl.searchParams.get("nickname"));
+    if (!nickname) return reject(socket, "昵称不能为空");
+    const existing = [...players.values()].find((player) => player.nickname === nickname);
+    if (existing) {
+      return reject(socket, "房间内已经有同昵称玩家");
+    }
+    if (players.size >= MAX_PLAYERS) return reject(socket, "房间已满");
+
+    const profile = ensureProfile(rootDir, nickname);
+    const player = {
+      id: createPlayerId(),
+      nickname,
+      socket,
+      ready: false,
+      inGame: false,
+      characterId: firstKey(characterDefinitions) || "character_1",
+      props: defaultCarriedProps(profile, propDefinitions),
+      profile,
+      joinedAt: Date.now(),
+      lastSeen: Date.now(),
+      sideConnections: 0,
+    };
+
+    players.set(player.id, player);
+    attachSocket(player, socket);
+    sendWsJson(socket, {
+      type: "join_success",
+      message: "加入成功",
+      body: { id: player.id, player: clientPlayer(player), room: roomSnapshot(player.id) },
+    });
+    broadcastRoomState();
+    return true;
+  }
+
+  function attachExistingPlayer(player, socket) {
+    const previousSocket = player.socket;
+    player.socket = socket;
+    player.lastSeen = Date.now();
+    attachSocket(player, socket);
+    if (previousSocket && previousSocket !== socket) previousSocket.destroy();
+    sendWsJson(socket, {
+      type: "join_success",
+      message: "加入成功",
+      body: { id: player.id, player: clientPlayer(player), room: roomSnapshot(player.id) },
+    });
+    broadcastRoomState();
+    return true;
+  }
+
+  function attachSocket(player, socket) {
+    socket.on("data", (buffer) => handleMessage(player, buffer));
+    socket.on("close", () => {
+      scheduleDisconnectRemoval(player, socket);
+    });
+    socket.on("error", () => {
+      scheduleDisconnectRemoval(player, socket);
+    });
+  }
+
+  function scheduleDisconnectRemoval(player, socket) {
+    if (player.inGame || player.socket !== socket) return;
+    player.lastSeen = Date.now();
+  }
+
+  function handleWarehouseUpgrade(req, socket, requestUrl) {
+    if (requestUrl.pathname !== "/warehouse-ws") return false;
+    if (!acceptWebSocket(req, socket)) return true;
+    const player = resolvePlayerForSideConnection(requestUrl.searchParams.get("playerId"), socket);
+    if (!player) return rejectWs(socket, "只有房间内玩家可以访问仓库");
+    player.lastSeen = Date.now();
+    player.sideConnections = (player.sideConnections || 0) + 1;
+    sendWarehouseState(player, socket);
+    socket.on("data", (buffer) => {
+      player.lastSeen = Date.now();
+      handleWarehouseMessage(player, socket, buffer);
+    });
+    socket.on("close", () => {
+      player.sideConnections = Math.max(0, (player.sideConnections || 0) - 1);
+    });
+    socket.on("error", () => {});
+    return true;
+  }
+
+  function handleShopUpgrade(req, socket, requestUrl) {
+    if (requestUrl.pathname !== "/shop-ws") return false;
+    if (!acceptWebSocket(req, socket)) return true;
+    const player = resolvePlayerForSideConnection(requestUrl.searchParams.get("playerId"), socket);
+    if (!player) return rejectWs(socket, "只有房间内玩家可以访问商城");
+    player.lastSeen = Date.now();
+    player.sideConnections = (player.sideConnections || 0) + 1;
+    sendShopState(player, socket);
+    socket.on("data", (buffer) => {
+      player.lastSeen = Date.now();
+      handleShopMessage(player, socket, buffer);
+    });
+    socket.on("close", () => {
+      player.sideConnections = Math.max(0, (player.sideConnections || 0) - 1);
+    });
+    socket.on("error", () => {});
+    return true;
+  }
+
+  function resolvePlayerForSideConnection(playerId, socket) {
+    let player = players.get(playerId);
+    if (!player && disconnectedPlayers.has(playerId) && players.size < MAX_PLAYERS) {
+      player = disconnectedPlayers.get(playerId);
+      disconnectedPlayers.delete(playerId);
+      player.socket = socket;
+      player.inGame = false;
+      player.ready = false;
+      player.sideConnections = 0;
+      players.set(player.id, player);
+      broadcastRoomState();
+    }
+    return player;
+  }
+
+  function handleMessage(player, buffer) {
+    player.lastSeen = Date.now();
+    const message = readJson(buffer);
+    if (!message) return sendWsJson(player.socket, { type: "error", message: "消息格式错误" });
+    if (message.type === "ws_close") {
+      if (!player.inGame) removePlayer(player.id);
+      return;
+    }
+    if (message.type === "heartbeat") return;
+
+    if (message.type === "set_selection") {
+      if (!player.inGame) applySelection(player, message.selection);
+      broadcastRoomState();
+      return;
+    }
+
+    if (message.type === "set_ready") {
+      if (player.inGame) return sendWsJson(player.socket, { type: "error", message: "游戏中不能准备下一局" });
+      applySelection(player, message.selection);
+      if (isHost(player.id)) return sendWsJson(player.socket, { type: "error", message: "房主不能设置准备状态" });
+      player.ready = Boolean(message.ready);
+      broadcastRoomState();
+      return;
+    }
+
+    if (message.type === "save_loadout") {
+      player.profile.settings.propLoadout = normalizeLoadout(message.props, propDefinitions);
+      saveProfileByNickname(rootDir, player.profile);
+      sendWsJson(player.socket, { type: "loadout_saved", message: "配置已保存" });
+      return;
+    }
+
+    if (message.type === "use_loadout") {
+      const loadout = normalizeLoadout(player.profile.settings.propLoadout, propDefinitions);
+      const validation = validatePropCounts(player.profile, loadout);
+      if (!validation.ok) return sendWsJson(player.socket, { type: "error", message: validation.message });
+      player.props = loadout;
+      player.ready = false;
+      sendWsJson(player.socket, { type: "loadout_used", body: { props: loadout } });
+      broadcastRoomState();
+      return;
+    }
+
+    if (message.type === "start_game") {
+      applySelection(player, message.selection);
+      if (!isHost(player.id)) return sendWsJson(player.socket, { type: "error", message: "只有房主可以开始游戏" });
+      if (!canStart()) return sendWsJson(player.socket, { type: "error", message: "至少需要2名未在游戏中的玩家，且其他玩家都已准备" });
+      const gamePlayers = [...players.values()]
+        .filter((entry) => !entry.inGame)
+        .map((entry) => ({
+          id: entry.id,
+          nickname: entry.nickname,
+          title: "",
+          characterId: entry.characterId,
+          props: entry.props,
+          profile: entry.profile,
+        }));
+      const validation = validateSelections(gamePlayers);
+      if (!validation.ok) return sendWsJson(player.socket, { type: "error", message: validation.message });
+      if (gamePlayers.some((gamePlayer) => gamePlayer.profile.money < currentContainer.entryFee)) {
+        return sendWsJson(player.socket, { type: "error", message: "有玩家余额不足" });
+      }
+      for (const gamePlayer of gamePlayers) {
+        deductMoney(gamePlayer.profile, currentContainer.entryFee);
+        saveProfileByNickname(rootDir, gamePlayer.profile);
+      }
+      for (const entry of players.values()) {
+        if (gamePlayers.some((gamePlayer) => gamePlayer.id === entry.id)) {
+          entry.inGame = true;
+          entry.ready = false;
+        }
+      }
+      gameInProgress = true;
+      onGameStart?.(gamePlayers, currentContainer);
+      broadcast({ type: "game_starting", message: "游戏即将开始", body: { url: "/game" } });
+      broadcastRoomState();
+      return;
+    }
+
+    sendWsJson(player.socket, { type: "error", message: "未知消息类型" });
+  }
+
+  function handleWarehouseMessage(player, socket, buffer) {
+    const message = readJson(buffer);
+    if (!message) return sendWsJson(socket, { type: "error", message: "消息格式错误" });
+    if (message.type === "ws_close") return socket.end();
+    if (message.type === "heartbeat") return;
+    try {
+      if (message.type === "toggle_favorite") {
+        const itemId = Number(message.itemId);
+        const collected = toggleFavorite(player.profile, itemId);
+        saveProfileByNickname(rootDir, player.profile);
+        sendWsJson(socket, { type: "favorite_updated", body: { itemId, collected } });
+        sendWarehouseState(player, socket);
+        return;
+      }
+      if (message.type === "sell_items") {
+        const result = sellProfileItems(player.profile, message.itemIds || [], message.quantity, itemsById);
+        saveProfileByNickname(rootDir, player.profile);
+        sendWsJson(socket, { type: "sell_result", body: result });
+        sendWarehouseState(player, socket);
+        broadcastRoomState();
+      }
+    } catch (error) {
+      sendWsJson(socket, { type: "error", message: error.message });
+    }
+  }
+
+  function handleShopMessage(player, socket, buffer) {
+    const message = readJson(buffer);
+    if (!message) return sendWsJson(socket, { type: "error", message: "消息格式错误" });
+    if (message.type === "heartbeat") return;
+    try {
+      if (message.type === "buy_props") {
+        const ids = Array.isArray(message.propIds) ? message.propIds : [];
+        const quantity = Math.max(1, Math.floor(Number(message.quantity) || 1));
+        const results = ids.map((id) => buyProfileProps(player.profile, id, quantity, propDefinitions));
+        saveProfileByNickname(rootDir, player.profile);
+        sendWsJson(socket, { type: "buy_result", body: { results, money: player.profile.money } });
+        sendShopState(player, socket);
+        broadcastRoomState();
+      }
+    } catch (error) {
+      sendWsJson(socket, { type: "error", message: error.message });
+    }
+  }
+
+  function completeGame() {
+    const now = Date.now();
+    for (const player of players.values()) {
+      player.inGame = false;
+      player.ready = false;
+      player.lastSeen = now;
+      player.sideConnections = 0;
+    }
+    gameInProgress = false;
+    currentContainer = pickContainer(containers);
+    broadcastRoomState();
+  }
+
+  function applySelection(player, selection = {}) {
+    if (!selection || typeof selection !== "object") return;
+    if (selection.characterId && characterDefinitions.has(selection.characterId)) player.characterId = selection.characterId;
+    if (Array.isArray(selection.props)) player.props = normalizeLoadout(selection.props, propDefinitions);
+  }
+
+  function sendWarehouseState(player, socket) {
+    sendWsJson(socket, {
+      type: "warehouse_state",
+      body: {
+        money: player.profile.money,
+        items: player.profile.warehouse.items,
+        props: player.profile.warehouse.props,
+        propDefinitions: Object.fromEntries(propDefinitions),
+      },
+    });
+  }
+
+  function sendShopState(player, socket) {
+    sendWsJson(socket, {
+      type: "shop_state",
+      body: {
+        money: player.profile.money,
+        props: Object.fromEntries(propDefinitions),
+      },
+    });
+  }
+
+  function roomSnapshot(viewerId) {
+    const hostId = getHostId();
+    return {
+      maxPlayers: MAX_PLAYERS,
+      hostId,
+      viewerId,
+      canStart: canStart(),
+      gameInProgress,
+      container: currentContainer,
+      players: [...players.values()].map((player) => ({ ...clientPlayer(player), isHost: player.id === hostId })),
+      characters: Object.fromEntries(characterDefinitions),
+      props: Object.fromEntries(propDefinitions),
+    };
+  }
+
+  function clientPlayer(player) {
+    return {
+      id: player.id,
+      nickname: player.nickname,
+      money: player.profile.money,
+      ready: player.ready,
+      inGame: player.inGame,
+      characterId: player.characterId,
+      props: player.props,
+      ownedProps: player.profile.warehouse.props,
+      savedLoadout: player.profile.settings.propLoadout,
+    };
+  }
+
+  function broadcastRoomState() {
+    for (const player of players.values()) sendWsJson(player.socket, { type: "room_state", body: roomSnapshot(player.id) });
+  }
+
+  function broadcast(payload) {
+    for (const player of players.values()) sendWsJson(player.socket, payload);
+  }
+
+  function removePlayer(id) {
+    const player = players.get(id);
+    if (!player) return;
+    players.delete(id);
+    disconnectedPlayers.set(id, {
+      ...player,
+      ready: false,
+      inGame: false,
+      sideConnections: 0,
+      lastSeen: Date.now(),
+    });
+    player.socket.destroy();
+    broadcastRoomState();
+  }
+
+  function getHostId() {
+    return [...players.values()].filter((player) => !player.inGame).sort((a, b) => a.joinedAt - b.joinedAt)[0]?.id || null;
+  }
+
+  function isHost(id) {
+    return getHostId() === id;
+  }
+
+  function canStart() {
+    if (gameInProgress) return false;
+    const candidates = [...players.values()].filter((player) => !player.inGame);
+    if (candidates.length < 2) return false;
+    const hostId = getHostId();
+    return candidates.every((player) => player.id === hostId || player.ready);
+  }
+
+  function createPlayerId() {
+    let id;
+    do {
+      id = String(Math.floor(Math.random() * 100_000_000)).padStart(8, "0");
+    } while (players.has(id));
+    return id;
+  }
+
+  return { handleUpgrade, handleWarehouseUpgrade, handleShopUpgrade, completeGame };
+}
+
+function reject(socket, message) {
+  sendWsJson(socket, { type: "join_error", message });
+  socket.end();
+  return true;
+}
+
+function rejectWs(socket, message) {
+  sendWsJson(socket, { type: "error", message });
+  socket.end();
+  return true;
+}
+
+function defaultCarriedProps(profile, propDefinitions) {
+  const saved = normalizeLoadout(profile.settings?.propLoadout, propDefinitions);
+  if (validatePropCounts(profile, saved).ok && saved.some(Boolean)) return saved;
+  const ids = Object.entries(profile.warehouse.props).filter(([, count]) => count > 0).map(([id]) => id).slice(0, 2);
+  return Array.from({ length: 5 }, (_, index) => (ids[index] ? normalizePropSelection(ids[index], propDefinitions) : null));
+}
+
+function normalizeLoadout(props, propDefinitions) {
+  return Array.from({ length: 5 }, (_, index) => normalizePropSelection(props?.[index], propDefinitions));
+}
+
+function normalizePropSelection(value, propDefinitions) {
+  if (!value) return null;
+  const id = typeof value === "string" ? value : String(value.id || "");
+  if (!id) return null;
+  const definition = propDefinitions.get(id) || {};
+  return { id, level: Number(definition.level || value.level) || 1 };
+}
+
+function validatePropCounts(profile, props) {
+  const counts = new Map();
+  for (const prop of props) {
+    if (!prop) continue;
+    counts.set(prop.id, (counts.get(prop.id) || 0) + 1);
+  }
+  for (const [id, count] of counts) {
+    if ((profile.warehouse.props[id] || 0) < count) return { ok: false, message: `道具数量不足: ${id}` };
+  }
+  return { ok: true };
+}
+
+function readJson(buffer) {
+  const text = decodeWsText(buffer);
+  if (!text) return { type: "ws_close" };
+  try {
+    return JSON.parse(text);
+  } catch {
+    return null;
+  }
+}
+
+function firstKey(map) {
+  return map.keys().next().value;
+}
+
+function normalizeNickname(nickname) {
+  return String(nickname || "").trim().slice(0, 20);
+}
+
+function loadContainers(rootDir) {
+  const config = JSON.parse(fs.readFileSync(path.join(rootDir, "config.json"), "utf8"));
+  const entries = Object.entries(config.containers || {});
+  if (!entries.length) return [{ name: "大型箱子", k: 1, entryFee: entryFeeForK(1) }];
+  return entries.map(([name, k]) => {
+    const value = Number(k) || 1;
+    return { name, k: value, entryFee: entryFeeForK(value) };
+  });
+}
+
+function pickContainer(containers) {
+  return containers[Math.floor(Math.random() * containers.length)];
+}
+
+function entryFeeForK(k) {
+  const value = Math.max(0, Math.min(2, Number(k) || 0));
+  const delta = value - 1;
+  return Math.ceil(30000 - 30000 * delta + 75000 * delta ** 2 - 65000 * delta ** 3);
+}

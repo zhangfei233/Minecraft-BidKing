@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>商城</title>
+    <link rel="stylesheet" href="/shop/shop.css" />
+  </head>
+  <body>
+    <main class="shop-page">
+      <aside class="side">
+        <h1>商城</h1>
+        <button id="backButton" type="button">返回</button>
+        <div class="money"><span class="coin">$</span><strong id="moneyValue">0</strong></div>
+      </aside>
+      <section class="content">
+        <header class="toolbar">
+          <button id="buyButton" type="button">购买</button>
+          <button id="buyQuantityButton" type="button">购买指定数量</button>
+          <span id="message"></span>
+        </header>
+        <div id="shopList" class="shop-list"></div>
+      </section>
+    </main>
+    <script type="module" src="/shop/shop.js"></script>
+  </body>
+</html>

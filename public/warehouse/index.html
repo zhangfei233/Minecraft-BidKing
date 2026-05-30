@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>个人仓库</title>
+    <link rel="stylesheet" href="/warehouse/warehouse.css" />
+  </head>
+  <body>
+    <main class="warehouse-page">
+      <aside class="filters">
+        <div class="side-title">
+          <h1>个人仓库</h1>
+          <button id="backButton" type="button">返回</button>
+        </div>
+        <section>
+          <h2>搜索</h2>
+          <input id="searchInput" placeholder="输入物品名" />
+        </section>
+        <section>
+          <h2>稀有度</h2>
+          <label><input type="radio" name="rarity" value="" checked />全部</label>
+          <div id="rarityFilters" class="rarity-options"></div>
+        </section>
+        <section>
+          <h2>类型</h2>
+          <label><input type="radio" name="type" value="" checked />全部</label>
+          <div id="typeFilters" class="type-options"></div>
+        </section>
+        <button id="queryButton">查询</button>
+      </aside>
+
+      <section class="content">
+        <header class="topbar">
+          <select id="kindSelect">
+            <option value="items">战利品</option>
+            <option value="props">道具</option>
+          </select>
+          <select id="sortSelect">
+            <option value="name_asc">名称升序</option>
+            <option value="name_desc">名称降序</option>
+            <option value="price_asc">单价升序</option>
+            <option value="price_desc">单价降序</option>
+          </select>
+          <button id="selectAllButton">全选</button>
+          <button id="clearSelectionButton">取消选择</button>
+          <button id="selectUnfavoriteButton">选择非收藏</button>
+          <button id="sellAllButton">全部出售</button>
+          <button id="sellPartialButton">部分出售</button>
+          <button id="toggleFavoriteButton">切换收藏状态</button>
+          <div class="money"><span id="selectedTotal"></span><span class="coin">$</span><strong id="moneyValue">0</strong></div>
+        </header>
+        <div id="message" class="message"></div>
+        <div class="items-grid" id="itemsGrid"></div>
+      </section>
+    </main>
+    <script type="module" src="/warehouse/warehouse.js"></script>
+  </body>
+</html>

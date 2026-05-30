@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>MC竞拍之王</title>
+    <link rel="stylesheet" href="/room/room.css" />
+  </head>
+  <body>
+    <main class="app">
+      <section class="login-view" id="loginView">
+        <form class="login-panel" id="loginForm">
+          <h1>MC竞拍之王</h1>
+          <label>
+            <span>昵称</span>
+            <input id="nicknameInput" name="nickname" maxlength="20" autocomplete="nickname" required />
+          </label>
+          <button type="submit">加入房间</button>
+          <p id="loginMessage"></p>
+        </form>
+      </section>
+
+      <section class="room-view" id="roomView" hidden>
+        <header class="room-top">
+          <div class="player-name" id="myNickname"></div>
+          <h1>MC竞拍之王</h1>
+          <div class="money-box">我的钱 <strong id="myMoney">0</strong></div>
+        </header>
+
+        <aside class="left-panel">
+          <div class="nav-buttons">
+            <button type="button" id="warehouseButton">仓库</button>
+            <button type="button" id="shopButton">商城</button>
+          </div>
+          <h2>玩家列表</h2>
+          <div class="player-list" id="playerList"></div>
+        </aside>
+
+        <section class="character-panel">
+          <div class="character-card">
+            <img class="avatar-large" id="characterAvatar" alt="" />
+            <button type="button" id="changeCharacterButton">改变角色</button>
+          </div>
+          <div class="character-info">
+            <h2>已选角色</h2>
+            <div id="characterDescription"></div>
+          </div>
+        </section>
+
+        <section class="inventory-panel">
+          <h2>携带道具（5格）</h2>
+          <div class="inventory" id="inventory"></div>
+          <div class="loadout-actions">
+            <button id="saveLoadoutButton" type="button">保存配置</button>
+            <button id="useLoadoutButton" type="button">使用配置</button>
+          </div>
+        </section>
+
+        <div class="start-panel">
+          <p>本次战利品容器：<strong id="containerName">-</strong></p>
+          <p>入场费：<strong id="entryFee">0</strong></p>
+          <button class="ready-button" id="readyButton" type="button" disabled>准备</button>
+        </div>
+      </section>
+    </main>
+
+    <dialog id="propPicker" class="prop-picker">
+      <form method="dialog">
+        <header>
+          <h2>选择携带道具</h2>
+          <button value="close" aria-label="关闭">×</button>
+        </header>
+        <div id="propGrid" class="prop-grid"></div>
+      </form>
+    </dialog>
+
+    <dialog id="characterPicker" class="character-picker">
+      <form method="dialog">
+        <header>
+          <h2>选择角色</h2>
+          <button value="close" aria-label="关闭">×</button>
+        </header>
+        <div id="characterChoices" class="character-choices"></div>
+      </form>
+    </dialog>
+
+    <script src="/room/room.js"></script>
+  </body>
+</html>

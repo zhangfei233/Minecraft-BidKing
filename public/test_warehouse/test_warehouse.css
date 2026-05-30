@@ -1,0 +1,80 @@
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background: #15191c;
+  color: #f0f4f6;
+  font-family: "Microsoft YaHei", "PingFang SC", system-ui, sans-serif;
+}
+
+main {
+  display: grid;
+  grid-template-columns: 260px minmax(540px, 1fr);
+  gap: 18px;
+  height: 100vh;
+  padding: 18px;
+}
+
+.controls {
+  display: grid;
+  align-content: start;
+  gap: 14px;
+}
+
+button {
+  height: 42px;
+  font: inherit;
+}
+
+.warehouse-scroll {
+  position: relative;
+  overflow: auto;
+  background: #cfcfcf;
+  padding: 8px;
+}
+
+#warehouseCanvas {
+  display: block;
+  width: 540px;
+}
+
+pre {
+  white-space: pre-wrap;
+}
+
+#kInfo {
+  color: #b9c4c8;
+  font-size: 14px;
+}
+
+.value-line strong {
+  color: #f0c65a;
+  font-size: 24px;
+}
+
+.canvas-tooltip {
+  position: fixed;
+  z-index: 10;
+  min-width: 160px;
+  padding: 8px 10px;
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  border-radius: 6px;
+  background: rgba(10, 13, 15, 0.92);
+  color: #fff;
+  font-size: 13px;
+  pointer-events: none;
+  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.32);
+}
+
+.canvas-tooltip strong,
+.canvas-tooltip span {
+  display: block;
+}
+
+.canvas-tooltip span {
+  color: #b9c4c8;
+  margin-top: 3px;
+}

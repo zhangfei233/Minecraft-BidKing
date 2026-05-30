@@ -1,0 +1,28 @@
+{
+  "containers": {
+    "废弃箱子矿车": 1.5,
+    "沉船宝箱": 1.2,
+    "地牢宝箱": 1,
+    "沙漠神殿宝箱": 0.8,
+    "铁匠铺箱子": 0.9
+  },
+  "warehouse": {
+    "price_bias_ratio": 10,
+    "rarity_base_weights": {
+      "gray": 8,
+      "green": 7,
+      "blue": 6,
+      "purple": 4,
+      "gold": 2,
+      "red": 1
+    },
+    "volume_min": 40,
+    "volume_max": 350,
+    "volume_normal_mean": 100,
+    "volume_normal_stddev": 50
+  },
+  "game": {
+    "system_hint_probability": 0.3
+  },
+  "port": 3000
+}

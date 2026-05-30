@@ -1,0 +1,10 @@
+id,name,description,level,price,image
+prop_1,陨石罗盘,显示一件随机战利品,2,10000,/resource/props/prop_1.png
+prop_2,旅行笔记,随机显示4件战利品的品质,3,30000,/resource/props/prop_2.png
+prop_3,硬质望远镜,随机显示3件战利品的轮廓,3,30000,/resource/props/prop_3.png
+prop_4,强化望远镜,随机显示4件战利品的轮廓,4,40000,/resource/props/prop_4.png
+prop_9,信号检测仪,随机显示2件科技类战利品的轮廓和品质,3,30000,/resource/props/prop_9.png
+prop_11,迷你挖掘机,显示所有多方块类战利品的轮廓,5,80000,/resource/props/prop_11.png
+prop_10,魔法球,随机显示2件魔法类战利品的轮廓和品质,3,30000,/resource/props/prop_10.png
+prop_7,自然模块,随机显示2件自然类战利品的轮廓和品质,3,30000,/resource/props/prop_7.png
+prop_8,宝石模块,随机显示2件矿物类战利品的轮廓和品质,3,30000,/resource/props/prop_8.png

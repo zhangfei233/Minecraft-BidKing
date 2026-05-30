@@ -1,0 +1,570 @@
+:root {
+  color-scheme: dark;
+  --text: #f2f5f6;
+  --muted: #b9c2c7;
+  --panel: rgba(14, 20, 23, 0.78);
+  --line: rgba(255, 255, 255, 0.22);
+  --lime: #c6ff00;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+[hidden] {
+  display: none !important;
+}
+
+body {
+  margin: 0;
+  width: 100vw;
+  height: 100vh;
+  min-height: 100vh;
+  overflow: hidden;
+  color: var(--text);
+  font-family: "Microsoft YaHei", "PingFang SC", system-ui, sans-serif;
+  background:
+    linear-gradient(90deg, rgba(0, 0, 0, 0.66), rgba(0, 0, 0, 0.2) 54%, rgba(12, 17, 20, 0.72)),
+    linear-gradient(135deg, #18323b, #0d1114);
+}
+
+button,
+a {
+  font: inherit;
+}
+
+.game-page {
+  height: 100vh;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 292px minmax(430px, 1fr) 520px;
+  grid-template-rows: minmax(0, 1fr) 154px;
+  grid-template-areas:
+    "players notices warehouse"
+    "players actions warehouse";
+  gap: 20px;
+  padding: 28px;
+  overflow: hidden;
+}
+
+.players {
+  grid-area: players;
+  min-height: 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.42);
+  overflow: hidden auto;
+}
+
+.player-card {
+  min-height: 140px;
+  padding: 8px;
+  border-bottom: 1px solid var(--line);
+}
+
+.player-card.is-offline {
+  opacity: 0.58;
+}
+
+.player-top {
+  display: grid;
+  grid-template-columns: 48px 1fr 92px;
+  gap: 8px;
+  align-items: center;
+}
+
+.avatar {
+  width: 48px;
+  height: 48px;
+  background: #777;
+  border: 2px solid #d8f2b0;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+}
+
+.avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.player-name {
+  min-width: 0;
+  font-weight: 800;
+  color: #a8ff42;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.title {
+  margin-top: 3px;
+  color: #e7c571;
+  font-size: 12px;
+  min-height: 16px;
+}
+
+.last-bid {
+  padding: 6px;
+  background: rgba(255, 255, 255, 0.88);
+  color: #16191a;
+  font-weight: 900;
+  text-align: right;
+}
+
+.round-items {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 4px;
+  margin-left: 56px;
+  margin-top: 8px;
+}
+
+.round-slot {
+  display: grid;
+  gap: 3px;
+  justify-items: center;
+  font-size: 11px;
+}
+
+.round-slot i {
+  width: 32px;
+  height: 32px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  background: var(--prop-bg, rgba(0, 0, 0, 0.42));
+  display: grid;
+  place-items: center;
+}
+
+.round-slot img {
+  width: 26px;
+  height: 26px;
+  object-fit: contain;
+}
+
+.notice-panel {
+  grid-area: notices;
+  min-height: 0;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(14, 24, 28, 0.78);
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.notice-panel header {
+  height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  white-space: nowrap;
+  border-bottom: 1px solid var(--line);
+  font-weight: 800;
+}
+
+.notice-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 14px;
+}
+
+.notice {
+  display: grid;
+  grid-template-columns: 54px 1fr auto;
+  gap: 12px;
+  align-items: center;
+  padding: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  background: rgba(0, 0, 0, 0.26);
+  margin-bottom: 10px;
+}
+
+.notice strong,
+.notice span {
+  display: block;
+}
+
+.notice span {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.notice button {
+  height: 30px;
+}
+
+.notice-icon {
+  width: 46px;
+  height: 46px;
+  background: #34464d;
+}
+
+.notice-icon img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.action-panel {
+  grid-area: actions;
+  justify-self: center;
+  align-self: end;
+  width: 336px;
+  height: 148px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(18, 20, 20, 0.72);
+  display: grid;
+  grid-template-columns: 76px 1fr;
+  grid-template-rows: 40px 1fr;
+  gap: 8px;
+  padding: 10px;
+}
+
+.timer {
+  grid-column: 1 / -1;
+  text-align: center;
+  font-size: 24px;
+  font-weight: 900;
+}
+
+.action-panel button {
+  border: 0;
+  color: #101200;
+  font-size: 24px;
+  font-weight: 900;
+  cursor: pointer;
+}
+
+#useItemButton {
+  background: #d7d7d7;
+  font-size: 13px;
+}
+
+#bidButton {
+  background: var(--lime);
+}
+
+#bidButton:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+#useItemButton:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.warehouse-panel {
+  grid-area: warehouse;
+  color: var(--text);
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.settlement-panel {
+  grid-area: players;
+  padding: 26px 18px;
+  background: rgba(0, 0, 0, 0.34);
+}
+
+.settlement-panel h2 {
+  margin: 0 0 24px;
+  font-size: 40px;
+}
+
+.settlement-winner-card img {
+  width: 72px;
+  height: 72px;
+  object-fit: cover;
+}
+
+.settlement-winner-card strong,
+.settlement-winner-card span {
+  display: block;
+  margin-top: 8px;
+}
+
+.settlement-value {
+  margin-top: 28px;
+}
+
+.settlement-value span,
+.settlement-value strong {
+  display: block;
+}
+
+.settlement-value span {
+  color: var(--muted);
+}
+
+.settlement-value strong {
+  margin-top: 8px;
+  font-size: 34px;
+}
+
+.settlement-value strong.positive {
+  color: #19ff4b;
+}
+
+.settlement-value strong.negative {
+  color: #ff2319;
+}
+
+.settlement-actions {
+  grid-area: actions;
+  justify-self: center;
+  align-self: end;
+  display: grid;
+  gap: 10px;
+  justify-items: center;
+}
+
+.settlement-actions button {
+  min-width: 128px;
+  height: 42px;
+  border: 1px solid var(--line);
+  background: #303a41;
+  color: var(--text);
+}
+
+#winnerSellActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: center;
+  max-width: 460px;
+}
+
+#winnerSellActions[hidden] {
+  display: none;
+}
+
+.rarity-sell-row {
+  flex-basis: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+}
+
+.settlement-rarity-filter {
+  display: flex;
+  gap: 8px;
+}
+
+.rarity-diamond {
+  min-width: 30px !important;
+  width: 30px;
+  height: 30px !important;
+  padding: 0;
+  border: 0;
+  background: transparent !important;
+}
+
+.rarity-diamond svg {
+  width: 24px;
+  height: 24px;
+  display: block;
+}
+
+.rarity-diamond path {
+  fill: transparent;
+  stroke: var(--rarity-color);
+  stroke-width: 2.4;
+}
+
+.rarity-diamond.is-selected path {
+  fill: var(--rarity-color);
+}
+
+.warehouse-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0 8px 8px;
+}
+
+.warehouse-head h1 {
+  margin: 0;
+  font-size: 28px;
+  font-weight: 800;
+  color: #ffffff;
+  text-shadow: 0 2px 5px rgba(0, 0, 0, 0.6);
+}
+
+.warehouse-head a {
+  background: #1e2024;
+  color: #fff;
+  text-decoration: none;
+  padding: 7px 12px;
+}
+
+.warehouse-scroll {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  padding: 8px;
+  background: rgba(207, 207, 207, 0.92);
+  border-radius: 8px;
+}
+
+#warehouseCanvas {
+  width: 100%;
+  max-width: 540px;
+  display: block;
+}
+
+dialog {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #20282d;
+  color: var(--text);
+}
+
+.bid-panel {
+  position: fixed;
+  left: 18px;
+  bottom: 18px;
+  z-index: 20;
+  display: grid;
+  grid-template-columns: 510px 430px;
+  gap: 12px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  background: rgba(32, 38, 42, 0.96);
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.42);
+}
+
+.bid-panel[hidden] {
+  display: none;
+}
+
+.keypad {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 6px;
+}
+
+.keypad button,
+.bid-display button {
+  min-height: 52px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: #2a2f32;
+  color: #d4d7d9;
+  font-size: 24px;
+  font-weight: 800;
+}
+
+.bid-display {
+  display: grid;
+  gap: 8px;
+  align-content: start;
+}
+
+.bid-display p {
+  margin: 0;
+  color: #f2f2f2;
+}
+
+.bid-number {
+  min-height: 76px;
+  display: grid;
+  place-items: center;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  background: linear-gradient(180deg, #3b3e42, #24272b);
+  color: #43a6ff;
+  font-size: 34px;
+  font-weight: 900;
+}
+
+.bid-cn {
+  text-align: center;
+  color: #e8e8e8;
+}
+
+#confirmBidButton {
+  background: var(--lime);
+  color: #121600;
+}
+
+.canvas-tooltip {
+  position: fixed;
+  z-index: 10;
+  min-width: 160px;
+  padding: 8px 10px;
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  border-radius: 6px;
+  background: rgba(10, 13, 15, 0.92);
+  color: #fff;
+  font-size: 13px;
+  pointer-events: none;
+  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.32);
+}
+
+.canvas-tooltip strong,
+.canvas-tooltip span {
+  display: block;
+}
+
+.canvas-tooltip span {
+  color: var(--muted);
+  margin-top: 3px;
+}
+
+.prop-dialog {
+  width: min(520px, calc(100vw - 40px));
+}
+
+.prop-dialog form {
+  display: grid;
+  gap: 12px;
+}
+
+.prop-dialog header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.prop-dialog h2 {
+  margin: 0;
+}
+
+.prop-choices {
+  display: grid;
+  gap: 10px;
+}
+
+.prop-choice {
+  display: grid;
+  grid-template-columns: 42px 1fr auto;
+  gap: 10px;
+  align-items: center;
+  padding: 8px;
+  border: 1px solid var(--line);
+  background: var(--prop-bg, rgba(255, 255, 255, 0.06));
+}
+
+.prop-choice img {
+  width: 42px;
+  height: 42px;
+  object-fit: contain;
+}
+
+.prop-choice strong,
+.prop-choice span {
+  display: block;
+}
+
+.prop-choice span {
+  color: var(--muted);
+  font-size: 12px;
+}

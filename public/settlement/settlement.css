@@ -1,0 +1,149 @@
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  color: #f1f6f7;
+  font-family: "Microsoft YaHei", "PingFang SC", system-ui, sans-serif;
+  background:
+    linear-gradient(90deg, rgba(0, 0, 0, 0.54), rgba(0, 0, 0, 0.12)),
+    linear-gradient(135deg, #0f3438, #111417);
+}
+
+.settlement {
+  min-height: 100vh;
+  display: grid;
+  grid-template-columns: minmax(360px, 1fr) 520px;
+  gap: 28px;
+  padding: 28px;
+}
+
+.summary p {
+  margin: 0 0 4px;
+  font-size: 22px;
+}
+
+.summary h1 {
+  margin: 0 0 24px;
+  font-size: 48px;
+}
+
+.winner {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  margin-bottom: 28px;
+}
+
+.avatar {
+  width: 72px;
+  height: 72px;
+  background: #70787d;
+  border: 2px solid #d5eebe;
+}
+
+.winner strong,
+.winner span {
+  display: block;
+}
+
+.winner span {
+  color: #e8bd63;
+}
+
+dl,
+dt,
+dd {
+  margin: 0;
+}
+
+dt {
+  margin-top: 24px;
+  color: #b9c4c8;
+  font-size: 20px;
+}
+
+dd {
+  font-size: 42px;
+  font-weight: 900;
+}
+
+#revealedValue {
+  font-size: 56px;
+  color: #f0c65a;
+}
+
+.profit {
+  color: #25ff45;
+}
+
+#continueButton {
+  position: fixed;
+  left: 50%;
+  bottom: 28px;
+  transform: translateX(-50%);
+  border: 0;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.64);
+  font-size: 24px;
+}
+
+.settlement-warehouse {
+  color: #fff;
+}
+
+.warehouse-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.warehouse-head h2 {
+  margin: 0;
+}
+
+.warehouse-head a {
+  background: #1e2024;
+  color: #fff;
+  text-decoration: none;
+  padding: 7px 12px;
+}
+
+.warehouse-scroll {
+  position: relative;
+  max-height: calc(100vh - 74px);
+  overflow: auto;
+  background: rgba(255, 255, 255, 0.08);
+  padding: 6px;
+}
+
+#warehouseCanvas {
+  width: 100%;
+  display: block;
+}
+
+.canvas-tooltip {
+  position: fixed;
+  z-index: 10;
+  min-width: 160px;
+  padding: 8px 10px;
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  border-radius: 6px;
+  background: rgba(10, 13, 15, 0.92);
+  color: #fff;
+  font-size: 13px;
+  pointer-events: none;
+  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.32);
+}
+
+.canvas-tooltip strong,
+.canvas-tooltip span {
+  display: block;
+}
+
+.canvas-tooltip span {
+  color: #b9c4c8;
+  margin-top: 3px;
+}

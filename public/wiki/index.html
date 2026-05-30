@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>藏品百科</title>
+    <link rel="stylesheet" href="/wiki/wiki.css" />
+  </head>
+  <body>
+    <main class="wiki-shell">
+      <aside class="filters" aria-label="物品过滤器">
+        <header class="filters__header">
+          <h1>藏品百科</h1>
+        </header>
+
+        <form id="filterForm">
+          <section class="filter-group">
+            <div class="filter-title">内容</div>
+            <select id="kindSelect">
+              <option value="items">战利品</option>
+              <option value="props">道具</option>
+            </select>
+          </section>
+          <section class="filter-group">
+            <div class="filter-title">稀有度</div>
+            <label class="filter-row filter-row--all">
+              <input type="radio" name="rarity" value="" checked />
+              <span>全部</span>
+            </label>
+            <div class="rarity-options" id="rarityFilters"></div>
+          </section>
+
+          <section class="filter-group">
+            <div class="filter-title">道具类型</div>
+            <label class="filter-row filter-row--all">
+              <input type="radio" name="type" value="" checked />
+              <span>全部</span>
+            </label>
+            <div class="type-options" id="typeFilters"></div>
+          </section>
+
+          <section class="filter-group">
+            <div class="filter-title">道具占位（长×宽）</div>
+            <label class="filter-row filter-row--all">
+              <input type="radio" name="size" value="" checked />
+              <span>全部</span>
+            </label>
+            <div class="size-options" id="sizeFilters"></div>
+          </section>
+
+          <button class="query-button" type="submit">查询</button>
+        </form>
+      </aside>
+
+      <section class="results">
+        <div class="average" id="averagePrice">当前筛选藏品平均价值为 0</div>
+        <div class="items-grid" id="itemsGrid"></div>
+      </section>
+    </main>
+
+    <script src="/wiki/wiki.js"></script>
+  </body>
+</html>

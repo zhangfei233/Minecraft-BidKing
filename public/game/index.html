@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>MC竞拍之王</title>
+    <link rel="stylesheet" href="/game/game.css" />
+  </head>
+  <body>
+    <main class="game-page">
+      <section class="players" id="players"></section>
+
+      <section class="notice-panel">
+        <header>第 <span id="roundNumber">1</span> 轮</header>
+        <div class="notice-list" id="noticeList"></div>
+      </section>
+
+      <section class="action-panel">
+        <div class="timer" id="timer">60</div>
+        <button type="button" id="useItemButton">使用道具</button>
+        <button type="button" id="bidButton">出价</button>
+      </section>
+
+      <aside class="warehouse-panel">
+        <div class="warehouse-head">
+          <h1>大型箱子</h1>
+          <a href="/wiki" target="_blank" rel="noreferrer">藏品百科</a>
+        </div>
+        <div class="warehouse-scroll">
+          <canvas id="warehouseCanvas"></canvas>
+          <div class="canvas-tooltip" id="canvasTooltip" hidden></div>
+        </div>
+      </aside>
+
+      <section class="settlement-panel" id="settlementPanel" hidden>
+        <h2>对局结束</h2>
+        <div id="settlementWinner"></div>
+        <div class="settlement-value">
+          <span>最终竞拍价格</span>
+          <strong id="finalBidValue">0</strong>
+        </div>
+        <div class="settlement-value">
+          <span>战利品价值</span>
+          <strong id="revealedLootValue">0</strong>
+        </div>
+        <div class="settlement-value">
+          <span>利润</span>
+          <strong id="profitValue">0</strong>
+        </div>
+      </section>
+
+      <section class="settlement-actions" id="settlementActions" hidden>
+        <p id="dividendText"></p>
+        <div id="winnerSellActions" hidden>
+          <button id="sellAllLootButton" type="button">全部出售</button>
+          <button id="sellUnfavoriteLootButton" type="button">出售非收藏</button>
+          <div class="rarity-sell-row">
+            <button id="sellRarityLootButton" type="button">按品质出售</button>
+            <div class="settlement-rarity-filter" id="settlementRarityFilter" aria-label="选择品质"></div>
+          </div>
+        </div>
+        <button id="returnRoomButton" type="button">返回房间</button>
+      </section>
+    </main>
+
+    <dialog id="propDialog" class="prop-dialog">
+      <form method="dialog">
+        <header>
+          <h2>使用道具</h2>
+          <button value="close" aria-label="关闭">×</button>
+        </header>
+        <div id="propChoices" class="prop-choices"></div>
+      </form>
+    </dialog>
+
+    <section class="bid-panel" id="bidPanel" hidden>
+      <div class="keypad">
+        <button data-key="1">1</button><button data-key="2">2</button><button data-key="3">3</button><button data-action="back">⌫</button>
+        <button data-key="4">4</button><button data-key="5">5</button><button data-key="6">6</button><button data-action="ratio" id="ratioButton">x2.0</button>
+        <button data-key="7">7</button><button data-key="8">8</button><button data-key="9">9</button><button data-action="last">上轮出价</button>
+        <button data-key="0">0</button><button data-key="00">00</button><button data-key="000">000</button><button data-action="clear">归零</button>
+      </div>
+      <div class="bid-display">
+        <p id="ratioHint">注意: 当前出价若高于第二名出价2倍则直接成交</p>
+        <div class="bid-number" id="bidNumber">0</div>
+        <div class="bid-cn" id="bidCn">0</div>
+        <button id="confirmBidButton" type="button">确认出价</button>
+        <button id="closeBidButton" type="button">关闭</button>
+      </div>
+    </section>
+
+    <script type="module" src="/game/game.js"></script>
+  </body>
+</html>

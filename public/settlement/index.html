@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>对局结束</title>
+    <link rel="stylesheet" href="/settlement/settlement.css" />
+  </head>
+  <body>
+    <main class="settlement">
+      <section class="summary">
+        <p>未知残骸</p>
+        <h1>对局结束</h1>
+        <div class="winner">
+          <div class="avatar"></div>
+          <div>
+            <strong>唯有梦有所期待</strong>
+            <span>狂热博士</span>
+          </div>
+        </div>
+        <dl>
+          <dt>当前揭示价值</dt>
+          <dd id="revealedValue">0</dd>
+          <dt>最终竞拍价格</dt>
+          <dd id="finalBid">8,888,888</dd>
+          <dt>战利品价格</dt>
+          <dd id="lootValue">13,630,537</dd>
+          <dt>利润</dt>
+          <dd class="profit" id="profit">4,741,649</dd>
+        </dl>
+        <button id="continueButton">点击这里继续</button>
+      </section>
+
+      <aside class="settlement-warehouse">
+        <div class="warehouse-head">
+          <h2>战利品</h2>
+          <a href="/wiki" target="_blank" rel="noreferrer">藏品百科</a>
+        </div>
+        <div class="warehouse-scroll">
+          <canvas id="warehouseCanvas"></canvas>
+          <div class="canvas-tooltip" id="canvasTooltip" hidden></div>
+        </div>
+      </aside>
+    </main>
+    <script type="module" src="/settlement/settlement.js"></script>
+  </body>
+</html>
