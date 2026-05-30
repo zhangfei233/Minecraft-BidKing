@@ -209,6 +209,36 @@ a {
   object-fit: cover;
 }
 
+.copied-loot-notice {
+  align-items: start;
+}
+
+.copied-loot-grid {
+  margin-top: 8px;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(86px, 1fr));
+  gap: 8px;
+  max-height: 260px;
+  overflow: auto;
+}
+
+.copied-loot-card {
+  min-height: 88px;
+  padding: 6px;
+  background: var(--rarity-color);
+  color: #050607;
+  font-weight: 800;
+  display: grid;
+  gap: 4px;
+  justify-items: center;
+}
+
+.copied-loot-card img {
+  width: 48px;
+  height: 48px;
+  object-fit: contain;
+}
+
 .action-panel {
   grid-area: actions;
   justify-self: center;
@@ -582,4 +612,12 @@ dialog {
 .prop-choice span {
   color: var(--muted);
   font-size: 12px;
+}
+
+.temporary-label {
+  display: inline-block;
+  margin-top: 4px;
+  color: #ffad33;
+  font-style: normal;
+  font-weight: 800;
 }

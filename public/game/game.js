@@ -29,11 +29,14 @@ let currentMoney = 0;
 let settlementFinalBid = 0;
 let hasBidThisRound = false;
 let hasUsedPropThisRound = false;
+let propUsesThisRound = 0;
+let maxPropUsesThisRound = 1;
+let pendingTargetUse = null;
 let settlementTimer = null;
 let showRoundResults = false;
 let roundResultTimer = null;
 const levelRarities = ["gray", "green", "blue", "purple", "gold", "red"];
-const rarityLabels = { gray: "白", green: "绿", blue: "蓝", purple: "紫", gold: "金", red: "红" };
+const rarityLabels = { gray: "\u767d", green: "\u7eff", blue: "\u84dd", purple: "\u7d2b", gold: "\u91d1", red: "\u7ea2" };
 const rarityColors = { red: "#ff6060", gold: "#faff75", purple: "#964aca", blue: "#7b8afc", green: "#95de93", gray: "#c7c7c7" };
 const audioCache = new Map();
 const selectedSettlementRarities = new Set();
@@ -65,6 +68,10 @@ document.querySelector("#returnRoomButton").addEventListener("click", () => sock
 canvas.addEventListener("click", (event) => {
   const cell = renderer.cellFromEvent(event);
   if (!cell) return;
+  if (pendingTargetUse) {
+    completeTargetUse(cell);
+    return;
+  }
   const hash = renderer.queryForCell(cell.x, cell.y);
   if (hash) window.open(`/wiki#${hash}`, "_blank", "noopener,noreferrer");
 });
@@ -99,6 +106,7 @@ function connectGameSocket() {
   socket.addEventListener("message", (event) => {
     const message = JSON.parse(event.data);
     if (message.type === "game_init") renderInit(message.body);
+    if (message.type === "prop_slots") handlePropSlots(message.body);
     if (message.type === "hint") handleHint(message);
     if (message.type === "notice") addNotice(message);
     if (message.type === "round_start") handleRoundStart(message.body);
@@ -117,6 +125,7 @@ function renderInit(data) {
   propDefinitions = data.propDefinitions || {};
   characterDefinitions = data.characterDefinitions || {};
   carriedProps = data.carriedProps || [];
+  maxPropUsesThisRound = Number(data.maxPropUses || 1);
   currentMoney = Number(data.money || 0);
   if (gameMoney) gameMoney.textContent = formatNumber(currentMoney);
   updateKnownLootValue(renderer.revealedValue());
@@ -176,8 +185,8 @@ function renderPlayerAvatar(player) {
 }
 
 function openPropDialog() {
-  if (hasBidThisRound || hasUsedPropThisRound) {
-    addNotice({ title: "操作失败", text: hasBidThisRound ? "出价后不能使用道具" : "本回合已经使用过道具", show: false, message: [] });
+  if (hasBidThisRound || propUsesThisRound >= maxPropUsesThisRound) {
+    addNotice({ title: "操作失败", text: hasBidThisRound ? "出价后不能使用道具" : "本回合已经达到道具使用次数上限", show: false, message: [] });
     return;
   }
   propChoices.innerHTML = carriedProps
@@ -189,7 +198,7 @@ function openPropDialog() {
       return `
         <button class="prop-choice" type="button" data-slot="${index}" title="${escapeHtml(description)}" style="--prop-bg:${propColor(def)}">
           ${def.image ? `<img src="${def.image}" alt="${escapeHtml(name)}" />` : "<span></span>"}
-          <span><strong>${escapeHtml(name)} Lv.${prop.level || 1}</strong><span>${escapeHtml(description)}</span></span>
+          <span><strong>${escapeHtml(name)} Lv.${prop.level || def.level || 1}</strong><span>${escapeHtml(description)}</span>${prop.temporary ? '<em class="temporary-label">临时</em>' : ""}</span>
           <span>第${index + 1}格</span>
         </button>
       `;
@@ -202,21 +211,25 @@ function openPropDialog() {
       const def = propDefinitions[prop.id] || {};
       const name = def.name || prop.id;
       if (confirm(`确认使用道具【${name}】吗？\n${def.description || ""}`)) {
-        hasUsedPropThisRound = true;
-        document.querySelector("#useItemButton").disabled = true;
         playSound("splash", "ogg");
-        socket?.send(JSON.stringify({ type: "use_prop", slot }));
         propDialog.close();
+        if (requiresTarget(prop.id)) {
+          pendingTargetUse = { slot, propId: prop.id };
+          addNotice({ title: "道具目标", text: "请选择一个战利品仓格子", show: false, message: [] });
+        } else {
+          sendUseProp(slot);
+        }
       }
     });
   }
   propDialog.showModal();
 }
-
 function handleRoundStart(body) {
   currentRound = body.round;
   hasBidThisRound = false;
   hasUsedPropThisRound = false;
+  propUsesThisRound = 0;
+  pendingTargetUse = null;
   document.querySelector("#bidButton").disabled = false;
   document.querySelector("#useItemButton").disabled = false;
   roundNumber.textContent = currentRound;
@@ -289,7 +302,7 @@ function handleGameOver(body) {
 
 function showSettlement(body) {
   document.querySelector("#players").hidden = true;
-  document.querySelector(".notice-panel").hidden = true;
+  document.querySelector(".notice-panel").hidden = !(body.copiedItems || []).length;
   document.querySelector(".action-panel").hidden = true;
   settlementPanel.hidden = false;
   settlementActions.hidden = true;
@@ -297,6 +310,7 @@ function showSettlement(body) {
   renderer.setFavoriteItemIds(body.favoritesByPlayer?.[myId] || []);
   renderer.onValueChange = (value) => updateSettlementValues(value);
   renderSettlementInfo(body);
+  renderCopiedItems(body.copiedItems || []);
   playSound("firework");
   renderer.animateFullWarehouse(body.warehouseItems || [], 10000).then(() => revealDividend(body));
 }
@@ -357,6 +371,35 @@ function renderSettlementInfo(body) {
   }
 }
 
+function renderCopiedItems(copiedItems) {
+  if (!copiedItems.length) return;
+  noticeList.innerHTML = "";
+  const grouped = new Map();
+  for (const entry of copiedItems) {
+    if (!grouped.has(entry.nickname)) grouped.set(entry.nickname, []);
+    grouped.get(entry.nickname).push(entry.item);
+  }
+  for (const [nickname, items] of grouped) {
+    const el = document.createElement("article");
+    el.className = "notice copied-loot-notice";
+    el.innerHTML = `
+      <div class="notice-icon"><img src="/resource/system_message.png" alt="" /></div>
+      <div>
+        <strong>${escapeHtml(nickname)}复制了以下物品：</strong>
+        <div class="copied-loot-grid">
+          ${items.map((item) => `
+            <div class="copied-loot-card" style="--rarity-color:${rarityColors[item.rarity] || rarityColors.gray}">
+              <span>${escapeHtml(item.name || `#${item.id}`)}</span>
+              <img src="/resource/auction/${item.id}.png" alt="" />
+            </div>
+          `).join("")}
+        </div>
+      </div>
+    `;
+    noticeList.appendChild(el);
+  }
+}
+
 function revealDividend(body) {
   const dividendEl = document.querySelector("#dividendText");
   dividendEl.textContent = body.dividend > 0 ? `\u672c\u5c40\u83b7\u5f97\u5206\u7ea2 ${formatNumber(body.dividend || 0)}` : "";
@@ -404,6 +447,7 @@ function startCountdown(seconds) {
     updateTimer();
     if (remainingSeconds <= 0) {
       stopCountdown();
+      if (pendingTargetUse) completeTargetUse({ x: 0, y: 0 });
       sendBid(0);
     }
   }, 1000);
@@ -412,6 +456,32 @@ function startCountdown(seconds) {
 function stopCountdown() {
   clearInterval(countdownTimer);
   countdownTimer = null;
+}
+
+function handlePropSlots(body) {
+  carriedProps = body.props || carriedProps;
+  propUsesThisRound = Number(body.uses || 0);
+  maxPropUsesThisRound = Number(body.maxUses || maxPropUsesThisRound || 1);
+  hasUsedPropThisRound = propUsesThisRound >= maxPropUsesThisRound;
+  document.querySelector("#useItemButton").disabled = hasBidThisRound || hasUsedPropThisRound;
+}
+
+function sendUseProp(slot, target = null) {
+  propUsesThisRound += 1;
+  hasUsedPropThisRound = propUsesThisRound >= maxPropUsesThisRound;
+  document.querySelector("#useItemButton").disabled = hasUsedPropThisRound;
+  socket?.send(JSON.stringify({ type: "use_prop", slot, target }));
+}
+
+function completeTargetUse(cell) {
+  const pending = pendingTargetUse;
+  pendingTargetUse = null;
+  if (!pending) return;
+  sendUseProp(pending.slot, cell);
+}
+
+function requiresTarget(id) {
+  return id === "sp_prop1" || id === "sp_prop2";
 }
 
 function updateTimer() {
@@ -480,7 +550,7 @@ function openBidPanel() {
 function updateBidPanel() {
   const ratio = currentWinRatio();
   document.querySelector("#ratioButton").textContent = `x${ratio.toFixed(1)}`;
-  document.querySelector("#ratioHint").textContent = `注意: 当前出价若高于第二名出价${ratio}倍则直接成交`;
+  document.querySelector("#ratioHint").textContent = `注意：当前出价若高于第二名出价 ${ratio} 倍则直接成交`;
   const value = Number(bidInput || 0);
   document.querySelector("#bidNumber").textContent = formatNumber(value);
   document.querySelector("#bidCn").textContent = chineseUnit(value);
@@ -527,5 +597,5 @@ function escapeHtml(value) {
 
 function propColor(prop) {
   if (!prop) return "rgba(0,0,0,0.42)";
-  return rarityColors[levelRarities[(Number(prop.level) || 1) - 1] || "gray"];
+  return rarityColors[levelRarities[Math.max(0, Math.min(5, (Number(prop.level) || 1) - 1))] || "gray"];
 }

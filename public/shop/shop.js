@@ -49,7 +49,7 @@ function connect() {
 function render() {
   list.innerHTML = Object.values(state.props)
     .map((prop) => {
-      const rarity = levelRarities[(Number(prop.level) || 1) - 1] || "gray";
+      const rarity = levelRarities[Math.max(0, Math.min(5, (Number(prop.level) || 1) - 1))] || "gray";
       return `
         <article class="prop-row ${state.selected.has(prop.id) ? "selected" : ""}" data-id="${prop.id}">
           <div class="prop-icon" style="--rarity-color:${rarityColors[rarity]}">${prop.image ? `<img src="${prop.image}" alt="" />` : ""}</div>

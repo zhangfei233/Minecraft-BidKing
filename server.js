@@ -65,6 +65,7 @@ const server = http.createServer((req, res) => {
 
   if (requestUrl.pathname === "/items.csv") return sendFile(res, path.join(ROOT, "items.csv"));
   if (requestUrl.pathname === "/props.csv") return sendFile(res, path.join(ROOT, "props.csv"));
+  if (requestUrl.pathname === "/sp_props.csv") return sendFile(res, path.join(ROOT, "sp_props.csv"));
 
   for (const prefix of ["/room/", "/wiki/", "/game/", "/settlement/", "/test_warehouse/", "/warehouse/", "/shop/", "/common/"]) {
     if (requestUrl.pathname.startsWith(prefix)) return serveStatic(res, PUBLIC_DIR, requestUrl.pathname.slice(1));

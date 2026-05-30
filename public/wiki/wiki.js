@@ -2,18 +2,18 @@ const rarityOrder = ["gray", "green", "blue", "purple", "gold", "red"];
 const rarityColors = { red: "#ff6060", gold: "#faff75", purple: "#964aca", blue: "#7b8afc", green: "#95de93", gray: "#c7c7c7" };
 const itemTypes = ["decoration", "ore", "tool", "equipment", "natural", "food", "tech", "magic", "mob", "book", "multiblock", "loot"];
 const typeLabels = {
-  decoration: "装饰",
-  ore: "矿物",
-  tool: "工具",
-  equipment: "装备",
-  natural: "自然",
-  food: "食物",
-  tech: "科技",
-  magic: "魔法",
-  mob: "生物",
-  book: "书籍",
-  multiblock: "多方块",
-  loot: "战利品",
+  decoration: "\u88c5\u9970",
+  ore: "\u77ff\u7269",
+  tool: "\u5de5\u5177",
+  equipment: "\u88c5\u5907",
+  natural: "\u81ea\u7136",
+  food: "\u98df\u7269",
+  tech: "\u79d1\u6280",
+  magic: "\u9b54\u6cd5",
+  mob: "\u751f\u7269",
+  book: "\u4e66\u7c4d",
+  multiblock: "\u591a\u65b9\u5757",
+  loot: "\u6218\u5229\u54c1",
 };
 
 const form = document.querySelector("#filterForm");
@@ -50,20 +50,25 @@ function buildFilters() {
 }
 
 async function loadData() {
-  const [itemsText, propsText] = await Promise.all([
+  const [itemsText, propsText, specialPropsText] = await Promise.all([
     fetch("/items.csv", { cache: "no-cache" }).then((r) => r.text()),
     fetch("/props.csv", { cache: "no-cache" }).then((r) => r.text()),
+    fetch("/sp_props.csv", { cache: "no-cache" }).then((r) => r.ok ? r.text() : ""),
   ]);
   allItems = parseCsv(itemsText).map((item) => {
     const id = Number(item.id);
     const types = splitTypes(item.type);
     return { ...item, id, types, typeLabel: types.map((type) => typeLabels[type] || type).join(";"), rarity: item.rarity, width: Number(item.width), height: Number(item.height), price: Number(item.price), image: `/resource/auction/${id}.png` };
   });
-  allProps = parseCsv(propsText).map((prop) => {
+  const normalProps = parseCsv(propsText).map((prop) => {
     const level = Number(prop.level || 1);
-    const rarity = rarityOrder[level - 1] || "gray";
-    return { ...prop, id: prop.id, level, rarity, typeLabel: `道具 Lv.${level}`, width: 1, height: 1, price: Number(prop.price || 0), image: prop.image };
+    const rarity = rarityOrder[Math.max(0, Math.min(5, level - 1))] || "gray";
+    return { ...prop, id: prop.id, level, rarity, typeLabel: `\u9053\u5177 Lv.${level}`, width: 1, height: 1, price: Number(prop.price || 0), image: prop.image };
   });
+  const specialProps = specialPropsText.trim()
+    ? parseCsv(specialPropsText).map((prop) => ({ ...prop, id: prop.id, level: 6, rarity: "red", typeLabel: "\u4e13\u5c5e\u9053\u5177", width: 1, height: 1, price: null, image: prop.image }))
+    : [];
+  allProps = [...normalProps, ...specialProps];
 }
 
 function currentFormParams() {
@@ -96,14 +101,15 @@ function query(params) {
   if (rarity) entries = entries.filter((item) => item.rarity === rarity);
   if (kind === "items" && type) entries = entries.filter((item) => item.types.includes(type));
   if (kind === "items" && size) entries = entries.filter((item) => `${item.width}x${item.height}` === size);
-  const total = entries.reduce((sum, item) => sum + item.price, 0);
-  return { kind, averagePrice: entries.length ? Math.round(total / entries.length) : 0, items: entries };
+  const priced = entries.filter((item) => Number.isFinite(item.price));
+  const total = priced.reduce((sum, item) => sum + item.price, 0);
+  return { kind, averagePrice: priced.length ? Math.round(total / priced.length) : 0, items: entries };
 }
 
 function renderResults(data) {
-  averagePrice.textContent = `当前筛选${data.kind === "props" ? "道具" : "藏品"}平均价值为 ${formatNumber(data.averagePrice)}`;
+  averagePrice.textContent = `\u5f53\u524d\u7b5b\u9009${data.kind === "props" ? "\u9053\u5177" : "\u85cf\u54c1"}\u5e73\u5747\u4ef7\u503c\u4e3a ${formatNumber(data.averagePrice)}`;
   if (!data.items.length) {
-    itemsGrid.innerHTML = '<div class="empty-state">没有符合条件的物品</div>';
+    itemsGrid.innerHTML = '<div class="empty-state">\u6ca1\u6709\u7b26\u5408\u6761\u4ef6\u7684\u7269\u54c1</div>';
     return;
   }
   itemsGrid.innerHTML = data.items.map((item) => `
@@ -111,7 +117,7 @@ function renderResults(data) {
       <div class="item-heading"><span class="item-name">${escapeHtml(item.name)}</span><span class="item-type">${escapeHtml(item.typeLabel)}</span></div>
       <img class="item-image" src="${item.image}" alt="${escapeHtml(item.name)}" />
       ${data.kind === "items" ? `<div class="card-size">${makeSizeIcon(item.width, item.height)}</div>` : ""}
-      <div class="item-footer"><span class="coin">$</span>${formatNumber(item.price)}</div>
+      <div class="item-footer"><span class="coin">$</span>${item.price == null ? "???" : formatNumber(item.price)}</div>
       ${item.description?.trim() ? `<div class="item-description">${escapeHtml(item.description)}</div>` : ""}
     </article>
   `).join("");

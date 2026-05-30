@@ -119,7 +119,7 @@ function currentEntries() {
         id,
         name: state.propDefinitions[id]?.name || id,
         typeLabel: "道具",
-        rarity: levelRarities[(Number(state.propDefinitions[id]?.level) || 1) - 1] || "gray",
+        rarity: levelRarities[Math.max(0, Math.min(5, (Number(state.propDefinitions[id]?.level) || 1) - 1))] || "gray",
         price: Number(state.propDefinitions[id]?.price || 0),
         count,
         image: state.propDefinitions[id]?.image || "",

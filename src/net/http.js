@@ -7,6 +7,8 @@ export const MIME_TYPES = {
   ".js": "application/javascript; charset=utf-8",
   ".json": "application/json; charset=utf-8",
   ".png": "image/png",
+  ".gif": "image/gif",
+  ".webp": "image/webp",
   ".svg": "image/svg+xml",
 };
 
@@ -22,6 +24,11 @@ export function sendJson(res, payload, status = 200) {
 export function sendFile(res, filePath) {
   fs.stat(filePath, (statError, stat) => {
     if (statError || !stat.isFile()) {
+      const fallbackPath = imageFallbackPath(filePath);
+      if (fallbackPath) {
+        sendFile(res, fallbackPath);
+        return;
+      }
       res.writeHead(404, { "content-type": "text/plain; charset=utf-8" });
       res.end("Not found");
       return;
@@ -49,6 +56,21 @@ export function sendFile(res, filePath) {
     });
     fs.createReadStream(filePath).pipe(res);
   });
+}
+
+function imageFallbackPath(filePath) {
+  if (path.extname(filePath).toLowerCase() !== ".png") return null;
+  const basePath = filePath.slice(0, -path.extname(filePath).length);
+  for (const ext of [".gif", ".webp"]) {
+    const candidate = `${basePath}${ext}`;
+    try {
+      const stat = fs.statSync(candidate);
+      if (stat.isFile()) return candidate;
+    } catch {
+      // Try the next supported image format.
+    }
+  }
+  return null;
 }
 
 export function safeJoin(baseDir, requestPath) {

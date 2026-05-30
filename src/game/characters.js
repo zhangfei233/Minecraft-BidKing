@@ -294,6 +294,9 @@ export function createCharacter(id, definition = {}) {
     character_13: PetraCharacter,
     character_14: SukunaCharacter,
     character_15: GojoCharacter,
+    character_16: Character,
+    character_17: Character,
+    character_18: Character,
   };
   const ClassName = map[id] || SteveCharacter;
   return new ClassName(definition);

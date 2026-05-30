@@ -1334,8 +1334,8 @@ id,name,type,description,rarity,height,width,price
 1333,精英箱柜,decoration;tech,,gold,3,4,330510
 1334,精英液体储罐,decoration;tech,,gold,4,3,358638
 1335,聚变堆框架,decoration;tech,,red,4,4,1075320
-1336,无尽催化剂,tech,,gold,5,3,2194880
-1337,无尽之锭,ore;tech,,red,5,2,5807590
+1336,无尽催化剂,tech;magic,催化无尽的贪婪,red,1,1,4846666
+1337,无尽之锭,ore;tech;magic,,red,1,2,6666666
 1338,终极化学品储罐,decoration;tech,,red,3,4,877007
 1339,终极能量立方,tech,,gold,4,3,393108
 1340,终极箱柜,decoration;tech,,red,2,3,671283
@@ -2702,3 +2702,14 @@ id,name,type,description,rarity,height,width,price
 2701,伊甸宝石块,magic;loot;ore,,gold,3,2,624534
 2702,永恒射手水晶,book;magic;loot;ore,,red,2,4,1404034
 2703,原始森林宝石块,magic;loot;ore,,gold,5,5,645050
+2704,寰宇肉丸,food;magic,,gold,1,1,567435
+2705,超级煲,food;magic,所有的食物浓缩而成,red,3,3,3547960
+2706,寰宇支配之剑,tool;tech;magic;,,red,4,2,9999999
+2707,世界崩解之镐,tool;tech;magic;ore,,red,4,3,8153452
+2708,自然荒芜之斧,tool;tech;magic;natural,,red,3,2,7945228
+2709,星球吞噬之锹,tool;tech;magic;natural,,red,3,1,7264362
+2710,无尽头盔,equipment;tech;magic,,red,2,3,7777777
+2711,无尽胸甲,equipment;tech;magic,,red,4,4,7777777
+2712,无尽护腿,equipment;tech;magic,,red,5,3,7777777
+2713,无尽靴子,equipment;tech;magic,,red,2,2,7777777
+2714,中子态素块,ore,,gold,5,5,555555

@@ -186,8 +186,8 @@ function renderInventory(me) {
     const prop = selection.props[index];
     const def = prop ? room.props?.[prop.id] : null;
     return `
-      <button class="prop-slot" type="button" data-slot="${index}" title="${def?.description || "?"}" style="--prop-bg:${propColor(def)}">
-        ${def ? `<span class="clear-prop" data-slot="${index}" title="??">?</span>` : ""}
+      <button class="prop-slot" type="button" data-slot="${index}" title="${def?.description || "空"}" style="--prop-bg:${propColor(def)}">
+        ${def ? `<span class="clear-prop" data-slot="${index}" title="移除">×</span>` : ""}
         ${def?.image ? `<img src="${def.image}" alt="${escapeHtml(def.name)}" />` : `<span>${index + 1}</span>`}
         ${def ? `<small>Lv.${def.level || 1}</small>` : ""}
       </button>
@@ -286,7 +286,7 @@ function escapeHtml(value) {
 
 function propColor(prop) {
   if (!prop) return "rgba(13, 16, 18, 0.7)";
-  return rarityColors[levelRarities[(Number(prop.level) || 1) - 1] || "gray"];
+  return rarityColors[levelRarities[Math.max(0, Math.min(5, (Number(prop.level) || 1) - 1))] || "gray"];
 }
 
 function preloadSound(name) {

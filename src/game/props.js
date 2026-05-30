@@ -109,17 +109,38 @@ class RevealAllMultiblockOutlineProp extends Prop {
   }
 }
 
+class RevealHighestUnknownValueProp extends Prop {
+  use({ warehouse, viewNumber, view, random }) {
+    const candidates = warehouse.items
+      .map((item, index) => ({ item, index }))
+      .filter(({ item, index }) => index > 0 && !itemOutlineKnown(view, item) && !itemRarityKnown(view, item) && !itemFullInfoKnown(view, item));
+    const maxPrice = candidates.reduce((max, { item }) => Math.max(max, Number(item.price || 0)), 0);
+    const indexes = candidates.filter(({ item }) => Number(item.price || 0) === maxPrice).map(({ index }) => index);
+    const [itemIndex] = randomItemIndexes(warehouse, (_item, index) => indexes.includes(index), 1, random);
+    const message = itemIndex ? [warehouse.addHint(viewNumber, { type: "item_full", itemIndex })] : [];
+    return this.package(this.description || "\u663e\u793a\u5b8c\u5168\u672a\u77e5\u7684\u6218\u5229\u54c1\u4e2d\u4ef7\u503c\u6700\u9ad8\u7684\u6218\u5229\u54c1", message);
+  }
+}
+
 export function createProp(id, definition = {}, level = 1) {
   const map = {
     prop_1: () => new RevealOneItemProp(definition, level),
     prop_2: () => new RevealRarityProp(definition, level, 4),
     prop_3: () => new RevealOutlineProp(definition, level, 3),
     prop_4: () => new RevealOutlineProp(definition, level, 4),
+    prop_5: () => new RevealOutlineProp(definition, level, 5),
+    prop_6: () => new RevealOutlineProp(definition, level, 6),
     prop_7: () => new RevealTypeOutlineRarityProp(definition, level, ["natural"], 2),
     prop_8: () => new RevealTypeOutlineRarityProp(definition, level, ["ore"], 2),
     prop_9: () => new RevealTypeOutlineRarityProp(definition, level, ["tech"], 2),
     prop_10: () => new RevealTypeOutlineRarityProp(definition, level, ["magic"], 2),
     prop_11: () => new RevealAllMultiblockOutlineProp(definition, level),
+    prop_12: () => new RevealRarityProp(definition, level, 5),
+    prop_13: () => new RevealRarityProp(definition, level, 3),
+    prop_14: () => new RevealRarityProp(definition, level, 6),
+    prop_15: () => new RevealRarityProp(definition, level, 7),
+    prop_16: () => new RevealHighestUnknownValueProp(definition, level),
+    prop_17: () => new RevealOutlineProp(definition, level, 1),
   };
   return (map[id] || map.prop_1)();
 }

@@ -11,7 +11,7 @@ import {
 } from "../player/profile.js";
 import { loadConfig, loadItemsById } from "../items/items.js";
 import { decodeWsText, sendWsJson } from "../net/websocket.js";
-import { splitTypes } from "./hints.js";
+import { itemFullInfoKnown, splitTypes } from "./hints.js";
 import { error as logError } from "../net/logger.js";
 
 const ROUND_COUNT = 5;
@@ -21,8 +21,8 @@ const INTERMISSION_MS = 3_000;
 const WIN_RATIOS = [2, 1.6, 1.3, 1.1, 1];
 const HEARTBEAT_TIMEOUT_MS = 45_000;
 const RARITIES = ["gray", "green", "blue", "purple", "gold", "red"];
-const RARITY_LABELS = { gray: "白", green: "绿", blue: "蓝", purple: "紫", gold: "金", red: "红" };
-const SYSTEM_HINT_TITLE = "公开的战利品信息";
+const RARITY_LABELS = { gray: "\u767d", green: "\u7eff", blue: "\u84dd", purple: "\u7d2b", gold: "\u91d1", red: "\u7ea2" };
+const SYSTEM_HINT_TITLE = "\u516c\u5f00\u7684\u6218\u5229\u54c1\u4fe1\u606f";
 
 export class GameSession {
   constructor({ rootDir, players, container = { name: "大型箱子", k: 1 }, random = Math.random, onFinish = null }) {
@@ -32,6 +32,8 @@ export class GameSession {
     this.onFinish = onFinish;
     this.characterDefinitions = loadDefinitions(rootDir, "characters.csv");
     this.propDefinitions = loadDefinitions(rootDir, "props.csv");
+    this.specialPropDefinitions = loadDefinitions(rootDir, "sp_props.csv");
+    this.allPropDefinitions = new Map([...this.propDefinitions, ...normalizeSpecialProps(this.specialPropDefinitions)]);
     this.itemsById = loadItemsById(rootDir);
     this.systemHintProbability = Number(loadConfig(rootDir).game?.system_hint_probability ?? 0.3);
     this.warehouse = new Warehouse({ rootDir, random });
@@ -55,9 +57,11 @@ export class GameSession {
       bids: Array(ROUND_COUNT).fill(null),
       submitted: Array(ROUND_COUNT).fill(false),
       usedProps: Array(ROUND_COUNT).fill(null),
-      usedPropThisRound: false,
+      propUsesThisRound: 0,
       characterState: {},
       pendingMessages: [],
+      pendingExclusiveProps: [],
+      copiedItems: [],
     }));
     this.playersById = new Map(this.players.map((player) => [player.id, player]));
     this.settlementOpen = false;
@@ -77,6 +81,7 @@ export class GameSession {
     for (const player of this.players) {
       for (const prop of player.props) {
         if (!prop) continue;
+        if (prop.temporary || prop.exclusive) continue;
         player.profile.warehouse.props[prop.id] -= 1;
       }
       saveProfileByNickname(this.rootDir, player.profile);
@@ -165,9 +170,10 @@ export class GameSession {
     if (this.finished) return;
     this.round = round;
     for (const player of this.players) {
-      player.usedPropThisRound = false;
+      player.propUsesThisRound = 0;
       player.submitted[round - 1] = Boolean(player.disconnected);
       player.bids[round - 1] = player.disconnected ? 0 : null;
+      this.applyRoundStartCharacterProps(player, round);
       this.send(player, { type: "round_start", body: { round, countdownSeconds: CLIENT_COUNTDOWN_SECONDS } });
     }
     this.broadcastPublicState({ clearBidState: true });
@@ -265,19 +271,19 @@ export class GameSession {
     const typeRarityItems = indexedItems.filter((item) => splitTypes(item.type).some((type) => pickedTypeSet.has(type)));
 
     return [
-      systemNumberHint("total-cells", `所有战利品总占用的格子数量为${totalCells}格`),
-      systemNumberHint("avg-cells", `每件战利品平均占用的格子数量为${averageCells(totalCells, indexedItems.length)}格`),
-      systemItemHint("random-full-x", `随机显示${randomXItems.length}件战利品`, randomXItems, "item_full"),
-      systemItemHint("largest-full", "随机显示一件占位格数最高的战利品", largest ? [largest] : [], "item_full"),
-      systemNumberHint("rarity-total-cells", `${RARITY_LABELS[y]}色品质的战利品总占用的格子数量为${sumCells(yItems)}格`),
-      systemNumberHint("rarity-avg-cells", `${RARITY_LABELS[y]}色品质的战利品平均占用的格子数量为${averageCells(sumCells(yItems), yItems.length)}格`),
-      systemNumberHint("random-z-avg-value", `随机选择的${randomZValueItems.length}件战利品的平均价值为${averageValue(randomZValueItems)}`),
-      systemNumberHint("random-t-kind-avg-value", `随机选择的${randomDistinctItems.length}种战利品的平均价值为${averageValue(randomDistinctItems)}`),
-      systemNumberHint("rarity-count", `本次的战利品仓共有${RARITY_LABELS[y]}色品质的战利品${yItems.length}件`),
-      systemCellRarityHint("type-rarity", `随机显示${pickedTypes.length}种类型的战利品的品质`, typeRarityItems),
-      systemCellRarityHint("random-z-rarity", `随机显示${randomZItems.length}件战利品的品质`, randomZItems),
-      systemItemHint("rarity-outline", `显示所有${RARITY_LABELS[y]}色战利品的轮廓`, yItems, "item_outline_rarity"),
-      systemNumberHint("rarity-avg-value", `${RARITY_LABELS[y]}色战利品的平均价值是${averageValue(yItems)}`),
+      systemNumberHint("total-cells", `\u6240\u6709\u6218\u5229\u54c1\u603b\u5360\u7528\u7684\u683c\u5b50\u6570\u91cf\u4e3a${totalCells}\u683c`),
+      systemNumberHint("avg-cells", `\u6bcf\u4ef6\u6218\u5229\u54c1\u5e73\u5747\u5360\u7528\u7684\u683c\u5b50\u6570\u91cf\u4e3a${averageCells(totalCells, indexedItems.length)}\u683c`),
+      systemItemHint("random-full-x", `\u968f\u673a\u663e\u793a${randomXItems.length}\u4ef6\u6218\u5229\u54c1`, randomXItems, "item_full"),
+      systemItemHint("largest-full", "\u968f\u673a\u663e\u793a\u4e00\u4ef6\u5360\u4f4d\u683c\u6570\u6700\u9ad8\u7684\u6218\u5229\u54c1", largest ? [largest] : [], "item_full"),
+      systemNumberHint("rarity-total-cells", `${RARITY_LABELS[y]}\u8272\u54c1\u8d28\u7684\u6218\u5229\u54c1\u603b\u5360\u7528\u7684\u683c\u5b50\u6570\u91cf\u4e3a${sumCells(yItems)}\u683c`),
+      systemNumberHint("rarity-avg-cells", `${RARITY_LABELS[y]}\u8272\u54c1\u8d28\u7684\u6218\u5229\u54c1\u5e73\u5747\u5360\u7528\u7684\u683c\u5b50\u6570\u91cf\u4e3a${averageCells(sumCells(yItems), yItems.length)}\u683c`),
+      systemNumberHint("random-z-avg-value", `\u968f\u673a\u9009\u62e9\u7684${randomZValueItems.length}\u4ef6\u6218\u5229\u54c1\u7684\u5e73\u5747\u4ef7\u503c\u4e3a${averageValue(randomZValueItems)}`),
+      systemNumberHint("random-t-kind-avg-value", `\u968f\u673a\u9009\u62e9\u7684${randomDistinctItems.length}\u79cd\u6218\u5229\u54c1\u7684\u5e73\u5747\u4ef7\u503c\u4e3a${averageValue(randomDistinctItems)}`),
+      systemNumberHint("rarity-count", `\u672c\u6b21\u7684\u6218\u5229\u54c1\u4ed3\u5171\u6709${RARITY_LABELS[y]}\u8272\u54c1\u8d28\u7684\u6218\u5229\u54c1${yItems.length}\u4ef6`),
+      systemCellRarityHint("type-rarity", `\u968f\u673a\u663e\u793a${pickedTypes.length}\u79cd\u7c7b\u578b\u7684\u6218\u5229\u54c1\u7684\u54c1\u8d28`, typeRarityItems),
+      systemCellRarityHint("random-z-rarity", `\u968f\u673a\u663e\u793a${randomZItems.length}\u4ef6\u6218\u5229\u54c1\u7684\u54c1\u8d28`, randomZItems),
+      systemItemHint("rarity-outline", `\u663e\u793a\u6240\u6709${RARITY_LABELS[y]}\u8272\u6218\u5229\u54c1\u7684\u8f6e\u5ed3`, yItems, "item_outline_rarity"),
+      systemNumberHint("rarity-avg-value", `${RARITY_LABELS[y]}\u8272\u6218\u5229\u54c1\u7684\u5e73\u5747\u4ef7\u503c\u662f${averageValue(yItems)}`),
     ];
   }
 
@@ -290,6 +296,7 @@ export class GameSession {
     }
 
     const result = this.evaluateWinner(roundIndex);
+    this.applyRoundEndCharacterProps(roundIndex);
     this.broadcast({
       type: "round_end",
       body: {
@@ -354,7 +361,7 @@ export class GameSession {
     }
 
     if (message.type === "use_prop") {
-      this.useProp(player, Number(message.slot));
+      this.useProp(player, Number(message.slot), message.target);
       return;
     }
 
@@ -375,39 +382,157 @@ export class GameSession {
     if (this.players.every((entry) => entry.submitted[roundIndex] || entry.disconnected)) this.endRound();
   }
 
-  useProp(player, slot) {
+  useProp(player, slot, target = null) {
     const roundIndex = this.round - 1;
     if (!Number.isInteger(slot) || slot < 0 || slot >= 5) {
-      this.send(player, { type: "error", message: "道具槽无效" });
+      this.send(player, { type: "error", message: "\u9053\u5177\u69fd\u65e0\u6548" });
       return;
     }
-    if (player.usedPropThisRound) {
-      this.send(player, { type: "error", message: "本回合已经使用过道具" });
+    if (player.propUsesThisRound >= maxPropUsesFor(player)) {
+      this.send(player, { type: "error", message: "\u672c\u56de\u5408\u5df2\u7ecf\u8fbe\u5230\u9053\u5177\u4f7f\u7528\u6b21\u6570\u4e0a\u9650" });
       return;
     }
     if (player.submitted[roundIndex]) {
-      this.send(player, { type: "error", message: "出价后不能使用道具" });
+      this.send(player, { type: "error", message: "\u51fa\u4ef7\u540e\u4e0d\u80fd\u4f7f\u7528\u9053\u5177" });
       return;
     }
     const selected = player.props[slot];
     if (!selected) {
-      this.send(player, { type: "error", message: "该槽位没有携带道具" });
+      this.send(player, { type: "error", message: "\u8be5\u69fd\u4f4d\u6ca1\u6709\u643a\u5e26\u9053\u5177" });
       return;
     }
 
-    player.usedPropThisRound = true;
+    let hint = null;
+    if (isSpecialProp(selected.id)) {
+      hint = this.useSpecialProp(player, selected, normalizeTarget(target));
+    } else {
+      const prop = createProp(selected.id, this.propDefinitions.get(selected.id), selected.level);
+      hint = prop.use({
+        warehouse: this.warehouse,
+        viewNumber: player.gameIndex,
+        view: this.warehouse.getView(player.gameIndex),
+        random: this.random,
+      });
+    }
+
+    player.propUsesThisRound += 1;
     player.usedProps[roundIndex] = selected;
-    const prop = createProp(selected.id, this.propDefinitions.get(selected.id), selected.level);
-    const hint = prop.use({
-      warehouse: this.warehouse,
-      viewNumber: player.gameIndex,
-      view: this.warehouse.getView(player.gameIndex),
-      random: this.random,
-    });
-    if (hint) hint.icon = this.propDefinitions.get(selected.id)?.image || "";
+    player.props[slot] = null;
+    if (player.characterId === "character_17") this.tryGrantPendingExclusive(player);
+    this.send(player, { type: "prop_slots", body: { props: player.props, uses: player.propUsesThisRound, maxUses: maxPropUsesFor(player) } });
+    if (hint) hint.icon = this.allPropDefinitions.get(selected.id)?.image || "";
     this.send(player, hint);
   }
 
+  useSpecialProp(player, selected, target) {
+    if (selected.id === "sp_prop1") return this.useTntProp(player, target);
+    if (selected.id === "sp_prop2") return this.useCopyProp(player, target);
+    return { type: "hint", title: `\u9053\u5177\u3010${selected.id}\u3011`, text: "\u8be5\u4e13\u5c5e\u9053\u5177\u5c1a\u672a\u5b9e\u73b0", show: false, message: [] };
+  }
+
+  applyRoundStartCharacterProps(player, round) {
+    if (player.characterId === "character_17") this.tryGrantPendingExclusive(player);
+    if (player.characterId === "character_18" && round % 2 === 1 && !player.props.some((prop) => prop?.id === "sp_prop2")) {
+      const candidates = player.props.map((prop, slot) => ({ prop, slot })).filter(({ prop }) => prop && !prop.exclusive);
+      if (candidates.length) {
+        const picked = candidates[Math.floor(this.random() * candidates.length)];
+        player.props[picked.slot] = makeTemporaryProp("sp_prop2", this.allPropDefinitions.get("sp_prop2"), { exclusive: true });
+        this.send(player, characterTextHint(`\u5947\u6570\u56de\u5408\u5f00\u59cb\uff0c\u5c06\u9053\u5177\u3010${this.allPropDefinitions.get(picked.prop.id)?.name || picked.prop.id}\u3011\u66ff\u6362\u4e3a\u4e34\u65f6\u4e13\u5c5e\u9053\u5177\u3010\u590d\u5236\u673a\u3011\u3002`, this.characterDefinitions.get(player.characterId)?.image));
+        this.send(player, { type: "prop_slots", body: { props: player.props, uses: player.propUsesThisRound || 0, maxUses: maxPropUsesFor(player) } });
+      } else {
+        this.send(player, characterTextHint("\u5947\u6570\u56de\u5408\u5f00\u59cb\uff0c\u4f46\u6ca1\u6709\u53ef\u66ff\u6362\u7684\u666e\u901a\u9053\u5177\u3002", this.characterDefinitions.get(player.characterId)?.image));
+      }
+    }
+  }
+
+  applyRoundEndCharacterProps(roundIndex) {
+    for (const player of this.players) {
+      if (player.characterId === "character_17") this.applyCreeperRoundEnd(player, roundIndex);
+      if (player.characterId === "character_16") this.applyLuxunRoundEnd(player, roundIndex);
+    }
+  }
+
+  applyCreeperRoundEnd(player, roundIndex) {
+    const ownBid = player.bids[roundIndex] || 0;
+    if (ownBid <= 0) return;
+    const matched = this.players.some((entry) => entry.id !== player.id && (entry.bids[roundIndex] || 0) >= ownBid * 0.9 && (entry.bids[roundIndex] || 0) <= ownBid * 1.1);
+    if (!matched) return;
+    player.characterState.creeperMatches = (player.characterState.creeperMatches || 0) + 1;
+    const progress = player.characterState.creeperMatches % 2 || 2;
+    this.send(player, characterTextHint(`\u76f8\u8fd1\u51fa\u4ef7\u6761\u4ef6\u8fbe\u6210\uff0c\u8fdb\u5ea6 ${progress}/2\u3002`, this.characterDefinitions.get(player.characterId)?.image));
+    const deserved = Math.floor(player.characterState.creeperMatches / 2);
+    const granted = player.characterState.creeperGranted || 0;
+    for (let i = granted; i < deserved; i += 1) player.pendingExclusiveProps.push("sp_prop1");
+    player.characterState.creeperGranted = deserved;
+  }
+
+  applyLuxunRoundEnd(player, roundIndex) {
+    if (roundIndex <= 0) return;
+    const bid = player.bids[roundIndex] || 0;
+    const previous = player.bids[roundIndex - 1] || 0;
+    if (bid !== previous) {
+      player.characterState.luxunChain = 1;
+      return;
+    }
+    player.characterState.luxunChain = (player.characterState.luxunChain || 1) + 1;
+    const count = player.characterState.luxunChain;
+    const pool = [...this.propDefinitions.keys()];
+    let granted = 0;
+    for (let i = 0; i < count; i += 1) {
+      const slot = firstEmptyPropSlot(player);
+      if (slot < 0 || !pool.length) break;
+      const id = pool[Math.floor(this.random() * pool.length)];
+      player.props[slot] = makeTemporaryProp(id, this.propDefinitions.get(id));
+      granted += 1;
+    }
+    if (granted > 0) this.send(player, characterTextHint(`\u8fde\u7eed\u51fa\u4ef7\u76f8\u540c\uff0c\u83b7\u5f97 ${granted} \u4ef6\u4e34\u65f6\u9053\u5177\u3002`, this.characterDefinitions.get(player.characterId)?.image));
+    this.send(player, { type: "prop_slots", body: { props: player.props, uses: player.propUsesThisRound || 0, maxUses: maxPropUsesFor(player) } });
+  }
+
+  tryGrantPendingExclusive(player) {
+    while (player.pendingExclusiveProps.length) {
+      const slot = firstEmptyPropSlot(player);
+      if (slot < 0) return;
+      const id = player.pendingExclusiveProps.shift();
+      player.props[slot] = makeTemporaryProp(id, this.allPropDefinitions.get(id), { exclusive: true });
+      this.send(player, characterTextHint("\u7d2f\u8ba1\u6ee1\u8db3\u6761\u4ef6\uff0c\u83b7\u5f97\u4e34\u65f6\u4e13\u5c5e\u9053\u5177\u3010TNT\u3011\u3002", this.characterDefinitions.get(player.characterId)?.image));
+    }
+    this.send(player, { type: "prop_slots", body: { props: player.props, uses: player.propUsesThisRound || 0, maxUses: maxPropUsesFor(player) } });
+  }
+
+  useTntProp(player, target) {
+    const radius = Math.max(1, this.round || 1);
+    const indexes = new Set();
+    for (let y = 0; y < this.warehouse.maxRows; y += 1) {
+      for (let x = 0; x < this.warehouse.width; x += 1) {
+        if (Math.abs(x - target.x) + Math.abs(y - target.y) > radius) continue;
+        const index = this.warehouse.getIndexAt(x, y);
+        if (index > 0 && !itemFullInfoKnown(this.warehouse.getView(player.gameIndex), this.warehouse.getItemByIndex(index))) indexes.add(index);
+      }
+    }
+    const message = [...indexes].map((itemIndex) => this.warehouse.addHint(player.gameIndex, { type: "item_full", itemIndex }));
+    return {
+      type: "hint",
+      title: "\u9053\u5177\u3010TNT\u3011",
+      text: `\u663e\u793a\u76ee\u6807\u683c\u66fc\u54c8\u987f\u8ddd\u79bb ${radius} \u4ee5\u5185\u7684\u6218\u5229\u54c1`,
+      show: message.length > 0,
+      message,
+    };
+  }
+
+  useCopyProp(player, target) {
+    const view = this.warehouse.getView(player.gameIndex);
+    if (view.rarityKnown[target.y][target.x] || view.outlineKnown[target.y][target.x]) {
+      return { type: "hint", title: "\u9053\u5177\u3010\u590d\u5236\u673a\u3011", text: "\u590d\u5236\u5931\u8d25\uff1a\u8be5\u683c\u5df2\u6709\u4fe1\u606f", show: false, message: [] };
+    }
+    const itemIndex = this.warehouse.getIndexAt(target.x, target.y);
+    if (!itemIndex) {
+      return { type: "hint", title: "\u9053\u5177\u3010\u590d\u5236\u673a\u3011", text: "\u590d\u5236\u5931\u8d25\uff1a\u8be5\u683c\u6ca1\u6709\u7269\u54c1", show: false, message: [] };
+    }
+    const item = this.warehouse.getItemByIndex(itemIndex);
+    player.copiedItems.push({ itemId: item.id, itemIndex, item: { ...item }, nickname: player.nickname, playerId: player.id });
+    return { type: "hint", title: "\u9053\u5177\u3010\u590d\u5236\u673a\u3011", text: "\u590d\u5236\u6210\u529f\uff0c\u5c06\u4e8e\u7ed3\u7b97\u9636\u6bb5\u63ed\u793a", show: false, message: [] };
+  }
   finishGame(winnerId) {
     this.finished = true;
     this.settlementOpen = true;
@@ -429,7 +554,12 @@ export class GameSession {
         const prop = player.props[index];
         if (!prop) continue;
         const used = player.usedProps.some((entry) => entry && entry.id === prop.id && entry.slot === index);
-        if (!used) player.profile.warehouse.props[prop.id] = (player.profile.warehouse.props[prop.id] || 0) + 1;
+        if (!used && !prop.temporary && !prop.exclusive) player.profile.warehouse.props[prop.id] = (player.profile.warehouse.props[prop.id] || 0) + 1;
+      }
+      for (const copied of player.copiedItems) {
+        const key = String(copied.itemId);
+        if (!player.profile.warehouse.items[key]) player.profile.warehouse.items[key] = { count: 0, collected: false };
+        player.profile.warehouse.items[key].count += 1;
       }
       if (dividend > 0) addMoney(player.profile, dividend);
       saveProfileByNickname(this.rootDir, player.profile);
@@ -452,6 +582,7 @@ export class GameSession {
         players: this.players.map((player) => publicPlayer(player)),
         winner: winner ? publicPlayer(winner) : null,
         favoritesByPlayer: Object.fromEntries(this.players.map((player) => [player.id, favoriteIds(player.profile)])),
+        copiedItems: this.players.flatMap((player) => player.copiedItems.map((entry) => ({ ...entry, nickname: player.nickname }))),
       },
     });
   }
@@ -488,8 +619,9 @@ export class GameSession {
         money: player.profile.money,
         players: this.players.map((entry) => publicPlayer(entry)),
         carriedProps: player.props,
-        propDefinitions: Object.fromEntries(this.propDefinitions),
+        propDefinitions: Object.fromEntries(this.allPropDefinitions),
         characterDefinitions: Object.fromEntries(this.characterDefinitions),
+        maxPropUses: maxPropUsesFor(player),
       },
     });
   }
@@ -620,6 +752,52 @@ function normalizeSelectedProps(props) {
   });
 }
 
+function normalizeTarget(target) {
+  return {
+    x: Math.max(0, Math.min(Warehouse.WIDTH - 1, Math.floor(Number(target?.x) || 0))),
+    y: Math.max(0, Math.min(Warehouse.MAX_ROWS - 1, Math.floor(Number(target?.y) || 0))),
+  };
+}
+
+function isSpecialProp(id) {
+  return String(id || "").startsWith("sp_prop");
+}
+
+function normalizeSpecialProps(definitions) {
+  return [...definitions].map(([id, definition]) => [
+    id,
+    {
+      ...definition,
+      level: 6,
+      price: "???",
+      rarity: "red",
+      exclusive: true,
+      special: true,
+    },
+  ]);
+}
+
+function makeTemporaryProp(id, definition = {}, extra = {}) {
+  return {
+    id,
+    level: Number(definition.level || 6) || 6,
+    temporary: true,
+    ...extra,
+  };
+}
+
+function characterTextHint(text, icon = "") {
+  return { type: "hint", title: "\u89d2\u8272\u6280\u80fd", text, icon, show: false, message: [] };
+}
+
+function firstEmptyPropSlot(player) {
+  return player.props.findIndex((prop) => !prop);
+}
+
+function maxPropUsesFor(player) {
+  return player.characterId === "character_16" ? 2 : 1;
+}
+
 function publicPlayer(player) {
   const activeRoundIndex = Math.max(0, (player.publicRound || 0) - 1);
   const visibleRoundBids = player.bids.map((bid, index) => (index < activeRoundIndex ? (bid == null ? null : bid) : null));
@@ -736,5 +914,5 @@ function publicHintItemIndex(warehouse, hint) {
 }
 
 function characterHasRoundOneEffect(characterId) {
-  return new Set(["character_3", "character_4", "character_6", "character_8", "character_9", "character_10", "character_11", "character_13", "character_15"]).has(characterId);
+  return new Set(["character_3", "character_4", "character_6", "character_8", "character_9", "character_10", "character_11", "character_13", "character_15", "character_18"]).has(characterId);
 }
