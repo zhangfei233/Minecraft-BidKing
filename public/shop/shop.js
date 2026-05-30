@@ -53,7 +53,7 @@ function render() {
       return `
         <article class="prop-row ${state.selected.has(prop.id) ? "selected" : ""}" data-id="${prop.id}">
           <div class="prop-icon" style="--rarity-color:${rarityColors[rarity]}">${prop.image ? `<img src="${prop.image}" alt="" />` : ""}</div>
-          <div class="prop-name"><strong>${escapeHtml(prop.name)}</strong><span>Lv.${prop.level || 1}</span></div>
+          <div class="prop-name"><div class="prop-title"><strong>${escapeHtml(prop.name)}</strong><i class="selected-check">✓</i></div><span>Lv.${prop.level || 1}</span></div>
           <div class="prop-desc">${escapeHtml(prop.description || "")}</div>
           <div class="price">${formatNumber(prop.price || 0)}</div>
         </article>

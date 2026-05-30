@@ -1,5 +1,6 @@
 import {
   firstUnknownCellForItem,
+  itemFullInfoKnown,
   itemFullyKnown,
   itemOutlineKnown,
   itemRarityKnown,
@@ -38,7 +39,7 @@ export class Prop {
 
 export class RevealOneItemProp extends Prop {
   use({ warehouse, viewNumber, view, random }) {
-    const [itemIndex] = randomItemIndexes(warehouse, (item) => !itemFullyKnown(view, item), 1, random);
+    const [itemIndex] = randomItemIndexes(warehouse, (item) => !itemFullInfoKnown(view, item), 1, random);
     const message = itemIndex ? [warehouse.addHint(viewNumber, { type: "item_full", itemIndex })] : [];
     return this.package(this.description || "\u663e\u793a\u4e00\u4ef6\u968f\u673a\u6218\u5229\u54c1", message);
   }

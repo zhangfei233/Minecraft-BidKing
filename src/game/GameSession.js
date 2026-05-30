@@ -259,17 +259,18 @@ export class GameSession {
     const randomZItems = sample(indexedItems, z, this.random);
     const randomZValueItems = sample(indexedItems, z, this.random);
     const randomDistinctItems = sample(uniqueItemsById(indexedItems), t, this.random);
-    const largestItems = [...indexedItems].sort((a, b) => itemCells(b) - itemCells(a));
-    const largest = largestItems[Math.floor(this.random() * Math.max(1, Math.min(3, largestItems.length)))];
+    const maxCells = indexedItems.reduce((max, item) => Math.max(max, itemCells(item)), 0);
+    const largestItems = indexedItems.filter((item) => itemCells(item) === maxCells);
+    const largest = largestItems[Math.floor(this.random() * Math.max(1, largestItems.length))];
     const typeRarityItems = indexedItems.filter((item) => splitTypes(item.type).some((type) => pickedTypeSet.has(type)));
 
     return [
       systemNumberHint("total-cells", `所有战利品总占用的格子数量为${totalCells}格`),
-      systemNumberHint("avg-cells", `每件战利品平均占用的格子数量为${average(totalCells, indexedItems.length)}格`),
+      systemNumberHint("avg-cells", `每件战利品平均占用的格子数量为${averageCells(totalCells, indexedItems.length)}格`),
       systemItemHint("random-full-x", `随机显示${randomXItems.length}件战利品`, randomXItems, "item_full"),
       systemItemHint("largest-full", "随机显示一件占位格数最高的战利品", largest ? [largest] : [], "item_full"),
       systemNumberHint("rarity-total-cells", `${RARITY_LABELS[y]}色品质的战利品总占用的格子数量为${sumCells(yItems)}格`),
-      systemNumberHint("rarity-avg-cells", `${RARITY_LABELS[y]}色品质的战利品平均占用的格子数量为${average(sumCells(yItems), yItems.length)}格`),
+      systemNumberHint("rarity-avg-cells", `${RARITY_LABELS[y]}色品质的战利品平均占用的格子数量为${averageCells(sumCells(yItems), yItems.length)}格`),
       systemNumberHint("random-z-avg-value", `随机选择的${randomZValueItems.length}件战利品的平均价值为${averageValue(randomZValueItems)}`),
       systemNumberHint("random-t-kind-avg-value", `随机选择的${randomDistinctItems.length}种战利品的平均价值为${averageValue(randomDistinctItems)}`),
       systemNumberHint("rarity-count", `本次的战利品仓共有${RARITY_LABELS[y]}色品质的战利品${yItems.length}件`),
@@ -683,6 +684,12 @@ function sumCells(items) {
 
 function average(total, count) {
   return count ? Math.ceil(total / count) : 0;
+}
+
+function averageCells(total, count) {
+  if (!count) return "0";
+  const value = total / count;
+  return Number.isInteger(value) ? String(value) : value.toFixed(2).replace(/0+$/, "").replace(/\.$/, "");
 }
 
 function averageValue(items) {

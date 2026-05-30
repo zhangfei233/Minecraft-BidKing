@@ -53,6 +53,10 @@ export function itemFullyKnown(view, item) {
   return itemOutlineKnown(view, item) && itemRarityKnown(view, item);
 }
 
+export function itemFullInfoKnown(view, item) {
+  return (view.hint || []).some((hint) => hint.type === "item_full" && Number(hint.itemIndex) === Number(item.index));
+}
+
 export function splitTypes(typeText) {
   return String(typeText || "")
     .split(";")

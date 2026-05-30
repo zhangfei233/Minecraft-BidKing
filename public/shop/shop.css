@@ -55,6 +55,7 @@ button { font: inherit; cursor: pointer; }
 
 .content {
   min-width: 0;
+  min-height: 0;
   padding: 18px;
   display: flex;
   flex-direction: column;
@@ -72,8 +73,11 @@ button { font: inherit; cursor: pointer; }
 #message { color: #9ee6a4; }
 
 .shop-list {
+  flex: 1 1 auto;
+  min-height: 0;
   overflow: auto;
   display: grid;
+  align-content: start;
   gap: 10px;
 }
 
@@ -88,7 +92,10 @@ button { font: inherit; cursor: pointer; }
   padding: 10px;
 }
 
-.prop-row.selected { outline: 3px solid #12d85f; }
+.prop-row.selected {
+  border-color: rgba(18, 216, 95, 0.75);
+  background: rgba(18, 80, 46, 0.3);
+}
 
 .prop-icon {
   width: 62px;
@@ -102,6 +109,28 @@ button { font: inherit; cursor: pointer; }
   width: 48px;
   height: 48px;
   object-fit: contain;
+}
+
+.prop-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.selected-check {
+  display: none;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: #fff;
+  color: #12b957;
+  font-weight: 900;
+  line-height: 20px;
+  text-align: center;
+}
+
+.prop-row.selected .selected-check {
+  display: inline-block;
 }
 
 .prop-name strong,

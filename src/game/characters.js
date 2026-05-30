@@ -1,6 +1,6 @@
 import {
   firstUnknownCellForItem,
-  itemFullyKnown,
+  itemFullInfoKnown,
   itemOutlineKnown,
   itemRarityKnown,
   makeHintPackage,
@@ -80,7 +80,7 @@ class SequentialTypeCharacter extends Character {
   onRoundStart({ warehouse, viewNumber, view, round, random }) {
     const indexes = itemsWithAnyType(warehouse, [this.type]).map(({ index }) => index);
     const fullCandidates = itemsWithAnyType(warehouse, [this.type])
-      .filter(({ item }) => !itemFullyKnown(view, item))
+      .filter(({ item }) => !itemFullInfoKnown(view, item))
       .map(({ index }) => index);
     const fullCount = Math.ceil(indexes.length / 3);
     if (round === 1) {
@@ -338,7 +338,7 @@ function itemsWithRarities(warehouse, rarities) {
 function pickHighestAvailableRarityItem(warehouse, view, random) {
   for (const rarity of [...RARITY_ORDER].reverse()) {
     const indexes = itemsWithRarities(warehouse, [rarity])
-      .filter(({ item }) => !itemFullyKnown(view, item))
+      .filter(({ item }) => !itemFullInfoKnown(view, item))
       .map(({ index }) => index);
     if (indexes.length) return sample(indexes, 1, random)[0];
   }

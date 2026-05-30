@@ -322,11 +322,27 @@ input {
 }
 
 .prop-slot {
+  position: relative;
   display: grid;
   place-items: center;
   cursor: pointer;
   padding: 4px;
   background: var(--prop-bg, rgba(13, 16, 18, 0.7));
+}
+
+.clear-prop {
+  position: absolute;
+  top: 3px;
+  right: 4px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #c92127;
+  color: #fff;
+  font-size: 14px;
+  line-height: 18px;
+  text-align: center;
+  z-index: 2;
 }
 
 .prop-slot img {
@@ -426,6 +442,7 @@ input {
 
 .prop-grid,
 .character-choices {
+  min-height: 0;
   overflow: auto;
   display: grid;
   gap: 10px;

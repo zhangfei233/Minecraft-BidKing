@@ -5,6 +5,8 @@ const noticeList = document.querySelector("#noticeList");
 const canvas = document.querySelector("#warehouseCanvas");
 const tooltip = document.querySelector("#canvasTooltip");
 const warehouseTitle = document.querySelector(".warehouse-head h1");
+const gameMoney = document.querySelector("#gameMoney");
+const knownLootValue = document.querySelector("#knownLootValue");
 const roundNumber = document.querySelector("#roundNumber");
 const propDialog = document.querySelector("#propDialog");
 const propChoices = document.querySelector("#propChoices");
@@ -42,6 +44,7 @@ document.addEventListener("pointerdown", (event) => {
 }, true);
 document.addEventListener("warehouse-image-loaded", () => renderer.render());
 loadClientItems().then((items) => renderer.setItems(items));
+renderer.onValueChange = updateKnownLootValue;
 connectGameSocket();
 setupBidPanel();
 buildSettlementRarityFilter();
@@ -115,6 +118,8 @@ function renderInit(data) {
   characterDefinitions = data.characterDefinitions || {};
   carriedProps = data.carriedProps || [];
   currentMoney = Number(data.money || 0);
+  if (gameMoney) gameMoney.textContent = formatNumber(currentMoney);
+  updateKnownLootValue(renderer.revealedValue());
   currentRound = data.round ?? 1;
   roundNumber.textContent = currentRound;
   warehouseTitle.textContent = data.warehouseName || "战利品仓";
@@ -287,7 +292,7 @@ function showSettlement(body) {
   document.querySelector(".notice-panel").hidden = true;
   document.querySelector(".action-panel").hidden = true;
   settlementPanel.hidden = false;
-  settlementActions.hidden = false;
+  settlementActions.hidden = true;
   settlementFinalBid = Number(body.finalBid || 0);
   renderer.setFavoriteItemIds(body.favoritesByPlayer?.[myId] || []);
   renderer.onValueChange = (value) => updateSettlementValues(value);
@@ -354,7 +359,8 @@ function renderSettlementInfo(body) {
 
 function revealDividend(body) {
   const dividendEl = document.querySelector("#dividendText");
-  dividendEl.textContent = body.dividend > 0 ? `本局获得分红 ${formatNumber(body.dividend || 0)}` : "";
+  dividendEl.textContent = body.dividend > 0 ? `\u672c\u5c40\u83b7\u5f97\u5206\u7ea2 ${formatNumber(body.dividend || 0)}` : "";
+  settlementActions.hidden = false;
 }
 
 function updateSettlementValues(value) {
@@ -365,6 +371,10 @@ function updateSettlementValues(value) {
   profitEl.textContent = formatNumber(profit);
   profitEl.classList.toggle("positive", profit > 0);
   profitEl.classList.toggle("negative", profit <= 0);
+}
+
+function updateKnownLootValue(value) {
+  if (knownLootValue) knownLootValue.textContent = formatNumber(Math.max(0, Number(value || 0)));
 }
 
 function addNotice(entry) {

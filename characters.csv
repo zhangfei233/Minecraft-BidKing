@@ -14,4 +14,6 @@ character_12,Otto,开局显示所有矿物类(Ore)战利品的轮廓和稀有度
 character_13,Petra,每回合显示两个完全未知的战利品的轮廓和稀有度,/resource/characters/Petra.png
 character_14,Sukuna,若你在前三回合的出价均为0，则第四回合的竞价结算时除你以外的出价排行第一名角色的本回合出价视为减半。,/resource/characters/Sukuna.png
 character_15,Gojo,开局进入【苍】阶段。第五回合，如果已经触发过【赫】的效果至少一次，则显示所有紫色稀有度的战利品。【苍】阶段：若你出价为本回合最高则下回合随机显示一半的蓝色战利品并进入【赫】阶段；【赫】阶段：若你出价为本回合出价最低则下回合随机显示一个红色战利品(没有则稀有度向下顺延)并进入【苍】阶段。,/resource/characters/Gojo.png
-
+character_16,Luxun, 你每回合可以使用两次道具。若你当回合出价与前一回合一致，你随机获得X件临时道具(X为你当前出价连续一致的回合数，但无法超过空道具槽数量)。,/resource/characters/Luxun.png
+character_17,Creeper,有其他角色的出价在你的出价的90%-110%区间内的回合每累积两个，你在有空道具槽时获得临时专属道具【TNT】1个。,/resource/characters/Creeper.png
+character_18,Quantum,奇数回合开始时，若你未持有专属道具，将你的一个随机道具替换为临时专属道具【复制机】。,/resource/characters/Quantum.png

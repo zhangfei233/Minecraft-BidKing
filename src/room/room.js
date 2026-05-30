@@ -29,7 +29,7 @@ export function createRoom({ rootDir, onGameStart }) {
   const heartbeatTimer = setInterval(() => {
     const now = Date.now();
     for (const player of players.values()) {
-      if (!player.inGame && !player.sideConnections && now - player.lastSeen > HEARTBEAT_TIMEOUT_MS) removePlayer(player.id);
+      if (!player.inGame && !player.sideConnections && now > (player.sidePageGraceUntil || 0) && now - player.lastSeen > HEARTBEAT_TIMEOUT_MS) removePlayer(player.id);
     }
     for (const [id, player] of disconnectedPlayers) {
       if (now - player.lastSeen > 120_000) disconnectedPlayers.delete(id);
@@ -78,6 +78,7 @@ export function createRoom({ rootDir, onGameStart }) {
       joinedAt: Date.now(),
       lastSeen: Date.now(),
       sideConnections: 0,
+      sidePageGraceUntil: 0,
     };
 
     players.set(player.id, player);
@@ -119,6 +120,7 @@ export function createRoom({ rootDir, onGameStart }) {
   function scheduleDisconnectRemoval(player, socket) {
     if (player.inGame || player.socket !== socket) return;
     player.lastSeen = Date.now();
+    broadcastRoomState();
   }
 
   function handleWarehouseUpgrade(req, socket, requestUrl) {
@@ -127,6 +129,7 @@ export function createRoom({ rootDir, onGameStart }) {
     const player = resolvePlayerForSideConnection(requestUrl.searchParams.get("playerId"), socket);
     if (!player) return rejectWs(socket, "只有房间内玩家可以访问仓库");
     player.lastSeen = Date.now();
+    player.sidePageGraceUntil = 0;
     player.sideConnections = (player.sideConnections || 0) + 1;
     sendWarehouseState(player, socket);
     socket.on("data", (buffer) => {
@@ -135,6 +138,7 @@ export function createRoom({ rootDir, onGameStart }) {
     });
     socket.on("close", () => {
       player.sideConnections = Math.max(0, (player.sideConnections || 0) - 1);
+      player.sidePageGraceUntil = Date.now() + HEARTBEAT_TIMEOUT_MS;
     });
     socket.on("error", () => {});
     return true;
@@ -146,6 +150,7 @@ export function createRoom({ rootDir, onGameStart }) {
     const player = resolvePlayerForSideConnection(requestUrl.searchParams.get("playerId"), socket);
     if (!player) return rejectWs(socket, "只有房间内玩家可以访问商城");
     player.lastSeen = Date.now();
+    player.sidePageGraceUntil = 0;
     player.sideConnections = (player.sideConnections || 0) + 1;
     sendShopState(player, socket);
     socket.on("data", (buffer) => {
@@ -154,6 +159,7 @@ export function createRoom({ rootDir, onGameStart }) {
     });
     socket.on("close", () => {
       player.sideConnections = Math.max(0, (player.sideConnections || 0) - 1);
+      player.sidePageGraceUntil = Date.now() + HEARTBEAT_TIMEOUT_MS;
     });
     socket.on("error", () => {});
     return true;
@@ -183,6 +189,11 @@ export function createRoom({ rootDir, onGameStart }) {
       return;
     }
     if (message.type === "heartbeat") return;
+
+    if (message.type === "enter_side_page") {
+      player.sidePageGraceUntil = Date.now() + 5 * 60_000;
+      return;
+    }
 
     if (message.type === "set_selection") {
       if (!player.inGame) applySelection(player, message.selection);
@@ -407,7 +418,7 @@ export function createRoom({ rootDir, onGameStart }) {
     const candidates = [...players.values()].filter((player) => !player.inGame);
     if (candidates.length < 2) return false;
     const hostId = getHostId();
-    return candidates.every((player) => player.id === hostId || player.ready);
+    return candidates.every((player) => !isSocketClosed(player.socket) && (player.id === hostId || player.ready));
   }
 
   function createPlayerId() {
@@ -480,6 +491,10 @@ function firstKey(map) {
 
 function normalizeNickname(nickname) {
   return String(nickname || "").trim().slice(0, 20);
+}
+
+function isSocketClosed(socket) {
+  return !socket || socket.destroyed || socket.closed;
 }
 
 function loadContainers(rootDir) {

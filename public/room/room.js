@@ -47,10 +47,10 @@ readyButton.addEventListener("click", () => {
 });
 
 document.querySelector("#warehouseButton").addEventListener("click", () => {
-  if (myId) location.href = `/warehouse?playerId=${encodeURIComponent(myId)}`;
+  if (myId) openSidePage(`/warehouse?playerId=${encodeURIComponent(myId)}`);
 });
 document.querySelector("#shopButton").addEventListener("click", () => {
-  if (myId) location.href = `/shop?playerId=${encodeURIComponent(myId)}`;
+  if (myId) openSidePage(`/shop?playerId=${encodeURIComponent(myId)}`);
 });
 document.querySelector("#saveLoadoutButton").addEventListener("click", () => {
   socket?.send(JSON.stringify({ type: "save_loadout", props: selection.props }));
@@ -186,17 +186,32 @@ function renderInventory(me) {
     const prop = selection.props[index];
     const def = prop ? room.props?.[prop.id] : null;
     return `
-      <button class="prop-slot" type="button" data-slot="${index}" title="${def?.description || "空"}" style="--prop-bg:${propColor(def)}">
+      <button class="prop-slot" type="button" data-slot="${index}" title="${def?.description || "?"}" style="--prop-bg:${propColor(def)}">
+        ${def ? `<span class="clear-prop" data-slot="${index}" title="??">?</span>` : ""}
         ${def?.image ? `<img src="${def.image}" alt="${escapeHtml(def.name)}" />` : `<span>${index + 1}</span>`}
         ${def ? `<small>Lv.${def.level || 1}</small>` : ""}
       </button>
     `;
   }).join("");
   for (const button of inventory.querySelectorAll(".prop-slot")) {
-    button.addEventListener("click", () => openPropPicker(Number(button.dataset.slot), me));
+    button.addEventListener("click", (event) => {
+      if (event.target.closest(".clear-prop")) {
+        selection.props[Number(button.dataset.slot)] = null;
+        sendSelection();
+        renderInventory(me);
+        return;
+      }
+      openPropPicker(Number(button.dataset.slot), me);
+    });
   }
 }
 
+function openSidePage(url) {
+  if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: "enter_side_page" }));
+  setTimeout(() => {
+    location.href = url;
+  }, 60);
+}
 function openPropPicker(slot, me) {
   editingSlot = slot;
   const propEntries = Object.entries(me.ownedProps || {}).filter(([, count]) => count > 0);

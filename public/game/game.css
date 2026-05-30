@@ -388,6 +388,7 @@ a {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  gap: 10px;
   padding: 0 8px 8px;
 }
 
@@ -397,6 +398,20 @@ a {
   font-weight: 800;
   color: #ffffff;
   text-shadow: 0 2px 5px rgba(0, 0, 0, 0.6);
+}
+
+.warehouse-meta {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  flex-wrap: wrap;
+  color: #f5f7f8;
+  font-size: 12px;
+}
+
+.warehouse-meta strong {
+  color: #f0c65a;
 }
 
 .warehouse-head a {
