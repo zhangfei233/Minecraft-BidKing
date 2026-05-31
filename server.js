@@ -35,9 +35,9 @@ const room = createRoom({
       rootDir: ROOT,
       players,
       container,
-      onFinish() {
+      onFinish(finalPlayers) {
         info("game finished");
-        room.completeGame();
+        room.completeGame(finalPlayers);
         activeGame = null;
       },
     });

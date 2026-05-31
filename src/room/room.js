@@ -312,9 +312,11 @@ export function createRoom({ rootDir, onGameStart }) {
     }
   }
 
-  function completeGame() {
+  function completeGame(finalPlayers = []) {
+    const finalPropsById = new Map(finalPlayers.map((player) => [player.id, player.props || []]));
     const now = Date.now();
     for (const player of players.values()) {
+      if (finalPropsById.has(player.id)) player.props = normalizePostGameProps(finalPropsById.get(player.id), propDefinitions);
       player.inGame = false;
       player.ready = false;
       player.lastSeen = now;
@@ -455,6 +457,14 @@ function normalizeLoadout(props, propDefinitions) {
   return Array.from({ length: 5 }, (_, index) => normalizePropSelection(props?.[index], propDefinitions));
 }
 
+function normalizePostGameProps(props, propDefinitions) {
+  return Array.from({ length: 5 }, (_, index) => {
+    const prop = props?.[index];
+    if (!prop || prop.temporary || prop.exclusive) return null;
+    return normalizePropSelection(prop, propDefinitions);
+  });
+}
+
 function normalizePropSelection(value, propDefinitions) {
   if (!value) return null;
   const id = typeof value === "string" ? value : String(value.id || "");
@@ -502,7 +512,8 @@ function loadContainers(rootDir) {
   const entries = Object.entries(config.containers || {});
   if (!entries.length) return [{ name: "大型箱子", k: 1, entryFee: entryFeeForK(1) }];
   return entries.map(([name, k]) => {
-    const value = Number(k) || 1;
+    const number = Number(k);
+    const value = Number.isFinite(number) ? number : 1;
     return { name, k: value, entryFee: entryFeeForK(value) };
   });
 }

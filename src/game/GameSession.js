@@ -35,7 +35,9 @@ export class GameSession {
     this.specialPropDefinitions = loadDefinitions(rootDir, "sp_props.csv");
     this.allPropDefinitions = new Map([...this.propDefinitions, ...normalizeSpecialProps(this.specialPropDefinitions)]);
     this.itemsById = loadItemsById(rootDir);
-    this.systemHintProbability = Number(loadConfig(rootDir).game?.system_hint_probability ?? 0.3);
+    const gameConfig = loadConfig(rootDir).game || {};
+    this.systemHintProbability = Number(gameConfig.system_hint_probability ?? 0.3);
+    this.dividendRatio = Number(gameConfig.dividend_ratio ?? 0.1);
     this.warehouse = new Warehouse({ rootDir, random });
     this.warehouse.generate(container.k);
     this.systemHintPool = this.createSystemHintPool();
@@ -58,6 +60,7 @@ export class GameSession {
       submitted: Array(ROUND_COUNT).fill(false),
       usedProps: Array(ROUND_COUNT).fill(null),
       propUsesThisRound: 0,
+      disconnectTimer: null,
       characterState: {},
       pendingMessages: [],
       pendingExclusiveProps: [],
@@ -96,25 +99,42 @@ export class GameSession {
       return;
     }
     if (player.disconnected) {
-      sendWsJson(socket, { type: "error", message: "本局游戏不支持重连" });
+      sendWsJson(socket, { type: "error", message: "本局游戏已判定掉线，不能重连" });
       socket.end();
       return;
     }
 
+    clearTimeout(player.disconnectTimer);
+    player.disconnectTimer = null;
+    const previousSocket = player.gameSocket;
     player.gameSocket = socket;
     player.connected = true;
     player.lastSeen = Date.now();
     socket.on("data", (buffer) => this.handleMessage(player, buffer));
-    socket.on("close", () => this.markDisconnected(player));
-    socket.on("error", () => this.markDisconnected(player));
+    socket.on("close", () => this.scheduleDisconnect(player, socket));
+    socket.on("error", () => this.scheduleDisconnect(player, socket));
+    if (previousSocket && previousSocket !== socket) previousSocket.destroy();
 
     this.sendInit(player);
     for (const payload of player.pendingMessages.splice(0)) this.send(player, payload);
     if (!this.started && this.players.every((entry) => entry.connected || entry.disconnected)) this.start();
   }
 
+  scheduleDisconnect(player, socket) {
+    if (this.finished || player.disconnected || player.gameSocket !== socket) return;
+    player.connected = false;
+    player.gameSocket = null;
+    player.lastSeen = Date.now();
+    clearTimeout(player.disconnectTimer);
+    player.disconnectTimer = setTimeout(() => this.markDisconnected(player), 20_000);
+    player.disconnectTimer.unref?.();
+  }
+
   markDisconnected(player) {
+    if (this.finished) return;
     if (player.disconnected) return;
+    clearTimeout(player.disconnectTimer);
+    player.disconnectTimer = null;
     player.connected = false;
     player.disconnected = true;
     player.gameSocket = null;
@@ -127,6 +147,8 @@ export class GameSession {
       }
     }
     this.broadcastPublicState({ clearBidState: false });
+    const roundIndex = this.round - 1;
+    if (roundIndex >= 0 && this.players.every((entry) => entry.submitted[roundIndex] || entry.disconnected)) this.endRound();
   }
 
   checkHeartbeats() {
@@ -169,6 +191,7 @@ export class GameSession {
   startRound(round) {
     if (this.finished) return;
     this.round = round;
+    this.roundStartedAt = Date.now();
     for (const player of this.players) {
       player.propUsesThisRound = 0;
       player.submitted[round - 1] = Boolean(player.disconnected);
@@ -297,6 +320,7 @@ export class GameSession {
 
     const result = this.evaluateWinner(roundIndex);
     this.applyRoundEndCharacterProps(roundIndex);
+    for (const player of this.players) player.publicRound = this.round + 1;
     this.broadcast({
       type: "round_end",
       body: {
@@ -347,7 +371,7 @@ export class GameSession {
     if (message.type === "return_room") {
       if (!this.roomCompleted) {
         this.roomCompleted = true;
-        this.onFinish?.();
+        this.onFinish?.(this.players);
       }
       this.send(player, { type: "return_room", body: { url: `/room?playerId=${encodeURIComponent(player.id)}` } });
       return;
@@ -522,7 +546,7 @@ export class GameSession {
 
   useCopyProp(player, target) {
     const view = this.warehouse.getView(player.gameIndex);
-    if (view.rarityKnown[target.y][target.x] || view.outlineKnown[target.y][target.x]) {
+    if (cellHasDirectKnownInfo(view, target.x, target.y)) {
       return { type: "hint", title: "\u9053\u5177\u3010\u590d\u5236\u673a\u3011", text: "\u590d\u5236\u5931\u8d25\uff1a\u8be5\u683c\u5df2\u6709\u4fe1\u606f", show: false, message: [] };
     }
     const itemIndex = this.warehouse.getIndexAt(target.x, target.y);
@@ -536,6 +560,7 @@ export class GameSession {
   finishGame(winnerId) {
     this.finished = true;
     this.settlementOpen = true;
+    for (const player of this.players) clearTimeout(player.disconnectTimer);
     clearTimeout(this.roundTimer);
     clearTimeout(this.intermissionTimer);
     clearInterval(this.heartbeatTimer);
@@ -546,7 +571,7 @@ export class GameSession {
     this.lastWinnerId = winner?.id || null;
     const finalBid = winner ? lastBidFor(winner) : 0;
     const finalProfit = winner ? totalValue - finalBid : 0;
-    const dividend = winner && finalProfit < 0 ? Math.ceil(Math.abs(finalProfit) / 10) : 0;
+    const dividend = winner && finalProfit < 0 ? Math.ceil(Math.abs(finalProfit) * Math.max(0, this.dividendRatio)) : 0;
     this.wonItemCounts = winner ? countItems(warehouseItems) : {};
 
     for (const player of this.players) {
@@ -622,6 +647,8 @@ export class GameSession {
         propDefinitions: Object.fromEntries(this.allPropDefinitions),
         characterDefinitions: Object.fromEntries(this.characterDefinitions),
         maxPropUses: maxPropUsesFor(player),
+        countdownSeconds: this.currentCountdownSeconds(),
+        hints: this.warehouse.getView(player.gameIndex).hint,
       },
     });
   }
@@ -718,6 +745,12 @@ export class GameSession {
     });
   }
 
+  currentCountdownSeconds() {
+    if (!this.started || this.finished || !this.roundStartedAt) return null;
+    const elapsed = Date.now() - this.roundStartedAt;
+    return Math.max(0, Math.ceil((ROUND_MS - elapsed) / 1000) - 2);
+  }
+
   send(player, payload) {
     if (!payload || player.disconnected) return;
     if (player.gameSocket) sendWsJson(player.gameSocket, payload);
@@ -798,10 +831,21 @@ function maxPropUsesFor(player) {
   return player.characterId === "character_16" ? 2 : 1;
 }
 
+function cellHasDirectKnownInfo(view, x, y) {
+  return (view.hint || []).some((hint) => {
+    if (hint.type === "cell_rarity") return hint.x === x && hint.y === y;
+    if (hint.type === "item_outline" || hint.type === "item_outline_rarity" || hint.type === "item_full") {
+      return x >= hint.x && x < hint.x + hint.width && y >= hint.y && y < hint.y + hint.height;
+    }
+    return false;
+  });
+}
+
 function publicPlayer(player) {
   const activeRoundIndex = Math.max(0, (player.publicRound || 0) - 1);
   const visibleRoundBids = player.bids.map((bid, index) => (index < activeRoundIndex ? (bid == null ? null : bid) : null));
   const lastVisibleBid = [...visibleRoundBids].reverse().find((bid) => bid != null) || 0;
+  const visibleUsedProps = player.usedProps.map((prop, index) => (index < activeRoundIndex ? prop : null));
   return {
     id: player.id,
     nickname: player.nickname,
@@ -813,7 +857,7 @@ function publicPlayer(player) {
     lastBid: lastVisibleBid,
     roundBids: visibleRoundBids,
     submitted: player.submitted,
-    usedProps: player.usedProps,
+    usedProps: visibleUsedProps,
   };
 }
 

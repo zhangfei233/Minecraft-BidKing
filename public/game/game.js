@@ -133,9 +133,13 @@ function renderInit(data) {
   roundNumber.textContent = currentRound;
   warehouseTitle.textContent = data.warehouseName || "战利品仓";
   noticeList.innerHTML = "";
+  renderer.reset();
+  if (Array.isArray(data.hints) && data.hints.length) renderer.applyHint({ message: data.hints });
+  updateKnownLootValue(renderer.revealedValue());
   renderPlayers(data.players || []);
   for (const notice of data.notices || []) addNotice(notice);
-  playSound("chest");
+  if (Number(data.countdownSeconds) > 0) startCountdown(Number(data.countdownSeconds));
+  else if (!data.reconnect) playSound("chest");
 }
 
 function renderPlayers(players) {

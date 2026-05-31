@@ -6,7 +6,8 @@
     "沙漠神殿宝箱": 0.8,
     "铁匠铺箱子": 0.9,
     "下界要塞箱子":0.6,
-    "末地城宝箱":0.3
+    "末地城宝箱":0.3,
+    "盖亚战利品箱":0.0
   },
   "warehouse": {
     "price_bias_ratio": 10,
@@ -24,7 +25,8 @@
     "volume_normal_stddev": 50
   },
   "game": {
-    "system_hint_probability": 0.3
+    "system_hint_probability": 0.3,
+    "dividend_ratio": 0.1
   },
   "port": 3000
 }
