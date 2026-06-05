@@ -13,6 +13,7 @@ import { loadConfig, loadItemsById } from "../items/items.js";
 import { decodeWsText, sendWsJson } from "../net/websocket.js";
 import { itemFullInfoKnown, splitTypes } from "./hints.js";
 import { error as logError } from "../net/logger.js";
+import { loadProductionRecipes, runProduction } from "../production/production.js";
 
 const ROUND_COUNT = 5;
 const ROUND_MS = 62_000;
@@ -35,10 +36,11 @@ export class GameSession {
     this.specialPropDefinitions = loadDefinitions(rootDir, "sp_props.csv");
     this.allPropDefinitions = new Map([...this.propDefinitions, ...normalizeSpecialProps(this.specialPropDefinitions)]);
     this.itemsById = loadItemsById(rootDir);
+    this.productionRecipes = loadProductionRecipes(rootDir, this.itemsById);
     const gameConfig = loadConfig(rootDir).game || {};
     this.systemHintProbability = Number(gameConfig.system_hint_probability ?? 0.3);
     this.dividendRatio = Number(gameConfig.dividend_ratio ?? 0.1);
-    this.warehouse = new Warehouse({ rootDir, random });
+    this.warehouse = new Warehouse({ rootDir, random, viewCount: players.length });
     this.warehouse.generate(container.k);
     this.systemHintPool = this.createSystemHintPool();
     this.usedSystemHintIds = new Set();
@@ -594,6 +596,11 @@ export class GameSession {
       deductMoney(winner.profile, finalBid);
       addWarehouseItemsToProfile(winner.profile, warehouseItems);
       saveProfileByNickname(this.rootDir, winner.profile);
+    }
+
+    for (const player of this.players) {
+      runProduction(player.profile, this.productionRecipes, this.random);
+      saveProfileByNickname(this.rootDir, player.profile);
     }
 
     this.broadcast({

@@ -35,6 +35,7 @@
           <select id="kindSelect">
             <option value="items">战利品</option>
             <option value="props">道具</option>
+            <option value="production">车间</option>
           </select>
           <select id="sortSelect">
             <option value="name_asc">名称升序</option>
@@ -52,8 +53,17 @@
         </header>
         <div id="message" class="message"></div>
         <div class="items-grid" id="itemsGrid"></div>
+        <div class="production-grid" id="productionGrid" hidden></div>
       </section>
     </main>
+    <dialog id="recipeDialog" class="recipe-dialog">
+      <form method="dialog">
+        <button value="close" aria-label="关闭">×</button>
+      </form>
+      <h2>需求物品</h2>
+      <div id="recipeDetailGrid" class="recipe-detail-grid"></div>
+    </dialog>
+    <div id="outputBubble" class="output-bubble" hidden></div>
     <script type="module" src="/warehouse/warehouse.js"></script>
   </body>
 </html>

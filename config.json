@@ -25,6 +25,7 @@
     "volume_normal_stddev": 50
   },
   "game": {
+    "max_players": 4,
     "system_hint_probability": 0.3,
     "dividend_ratio": 0.1
   },

@@ -1,6 +1,5 @@
 const rarityColors = { red: "#ff6060", gold: "#faff75", purple: "#964aca", blue: "#7b8afc", green: "#95de93", gray: "#c7c7c7" };
 const levelRarities = ["gray", "green", "blue", "purple", "gold", "red"];
-const audioCache = new Map();
 const itemTypes = ["decoration", "ore", "tool", "equipment", "natural", "food", "tech", "magic", "mob", "book", "multiblock", "loot"];
 const typeLabels = {
   decoration: "装饰",
@@ -17,25 +16,41 @@ const typeLabels = {
   loot: "战利品",
 };
 
-const state = { allItems: [], profileItems: {}, profileProps: {}, propDefinitions: {}, selected: new Set(), kind: "items" };
+const state = {
+  allItems: [],
+  itemMap: new Map(),
+  profileItems: {},
+  profileProps: {},
+  propDefinitions: {},
+  production: { slots: [] },
+  productionRecipes: [],
+  selected: new Set(),
+  kind: "items",
+};
+
 const itemsGrid = document.querySelector("#itemsGrid");
+const productionGrid = document.querySelector("#productionGrid");
 const moneyValue = document.querySelector("#moneyValue");
 const message = document.querySelector("#message");
 const selectedTotal = document.querySelector("#selectedTotal");
 const kindSelect = document.querySelector("#kindSelect");
 const sortSelect = document.querySelector("#sortSelect");
-
-preloadSound("click");
-document.addEventListener("pointerdown", (event) => {
-  if (event.target.closest("button, a")) playSound("click");
-}, true);
 const searchInput = document.querySelector("#searchInput");
+const recipeDialog = document.querySelector("#recipeDialog");
+const recipeDetailGrid = document.querySelector("#recipeDetailGrid");
+const outputBubble = document.querySelector("#outputBubble");
 
+const audioCache = new Map();
 let socket = null;
 let heartbeatTimer = null;
 
+preloadSound("click");
+document.addEventListener("pointerdown", (event) => {
+  if (event.target.closest("button, a, select")) playSound("click");
+}, true);
+
 buildFilters();
-loadItems().then(connectWarehouse);
+loadItems().then(loadProductionJson).then(connectWarehouse);
 
 document.querySelector("#backButton").addEventListener("click", () => {
   const playerId = new URLSearchParams(location.search).get("playerId") || "";
@@ -45,6 +60,7 @@ document.querySelector("#queryButton").addEventListener("click", render);
 kindSelect.addEventListener("change", () => {
   state.kind = kindSelect.value;
   state.selected.clear();
+  outputBubble.hidden = true;
   render();
 });
 sortSelect.addEventListener("change", render);
@@ -85,10 +101,19 @@ function connectWarehouse() {
       state.profileItems = msg.body.items || {};
       state.profileProps = msg.body.props || {};
       state.propDefinitions = msg.body.propDefinitions || {};
+      state.production = msg.body.production || { slots: [] };
+      if (Array.isArray(msg.body.productionRecipes) && msg.body.productionRecipes.length) state.productionRecipes = normalizeRecipes(msg.body.productionRecipes);
       moneyValue.textContent = formatNumber(msg.body.money);
       render();
     }
-    if (msg.type === "sell_result") showMessage(`出售获得 ${formatNumber(msg.body.total)}`);
+    if (msg.type === "favorite_updated") {
+      applyFavoriteState(Number(msg.body.itemId), Boolean(msg.body.collected));
+    }
+    if (msg.type === "sell_result") showMessage(`出售获得 $${formatNumber(msg.body.total)}`);
+    if (msg.type === "production_collect_result") {
+      const body = msg.body || {};
+      showMessage(body.mode === "sell" ? `出售获得了 $${formatNumber(body.total)}` : `将 ${body.itemName} * ${formatNumber(body.count)} 存入了仓库`);
+    }
     if (msg.type === "error") showMessage(msg.message || "操作失败");
   });
 }
@@ -109,6 +134,25 @@ async function loadItems() {
       image: `/resource/auction/${id}.png`,
     };
   });
+  state.itemMap = new Map(state.allItems.map((item) => [item.id, item]));
+}
+
+async function loadProductionJson() {
+  const text = await fetch("/production.json", { cache: "no-cache" }).then((r) => r.text()).catch(() => "[]");
+  const raw = JSON.parse(text || "[]");
+  const productOrderByRecipe = extractProductOrder(text);
+  state.productionRecipes = normalizeRecipes(Array.isArray(raw) ? raw : raw?.recipe_id ? [raw] : Object.values(raw || {}));
+  for (const recipe of state.productionRecipes) {
+    const order = productOrderByRecipe.get(recipe.recipe_id);
+    if (order?.length) {
+      const rawRecipe = findRawRecipe(raw, recipe.recipe_id);
+      recipe.products = order
+        .map((id) => ({ id, probability: Number(rawRecipe?.product?.[id] ?? rawRecipe?.product?.[String(id)] ?? 0) }))
+        .filter((product) => state.itemMap.has(product.id))
+        .slice(0, 2);
+      recipe.label = `${recipe.recipe.map(itemName).join(", ")} - ${recipe.products.map((product) => itemName(product.id)).join(", ")}`;
+    }
+  }
 }
 
 function currentEntries() {
@@ -148,6 +192,22 @@ function currentEntries() {
 }
 
 function render() {
+  const productionMode = state.kind === "production";
+  document.querySelector(".warehouse-page").classList.toggle("production-mode", productionMode);
+  document.querySelector(".filters").hidden = productionMode;
+  itemsGrid.hidden = productionMode;
+  productionGrid.hidden = !productionMode;
+  document.querySelectorAll("#sortSelect, #selectAllButton, #clearSelectionButton, #selectUnfavoriteButton, #sellAllButton, #sellPartialButton, #toggleFavoriteButton")
+    .forEach((element) => (element.hidden = productionMode));
+  if (productionMode) {
+    selectedTotal.textContent = "";
+    renderProduction();
+  } else {
+    renderInventory();
+  }
+}
+
+function renderInventory() {
   const entries = currentEntries();
   const selectedValue = entries
     .filter((item) => state.selected.has(String(item.id)))
@@ -173,8 +233,154 @@ function render() {
       render();
     });
   }
-  for (const heart of itemsGrid.querySelectorAll(".heart")) {
-    heart.addEventListener("click", () => socket?.send(JSON.stringify({ type: "toggle_favorite", itemId: Number(heart.dataset.heart) })));
+  bindHeartButtons(itemsGrid);
+}
+
+function renderProduction() {
+  const slots = Array.from({ length: 3 }, (_, index) => state.production.slots?.[index] || { recipeId: null, inputs: [], outputs: [] });
+  productionGrid.innerHTML = `
+    <div class="production-title">
+      <h2>生产车间</h2>
+      <p>利用战利品产生更多战利品!</p>
+    </div>
+    ${slots.map((slot, slotIndex) => productionSlotHtml(slot, slotIndex)).join("")}
+  `;
+  for (const select of productionGrid.querySelectorAll(".recipe-select")) {
+    select.addEventListener("change", () => socket?.send(JSON.stringify({ type: "production_set_recipe", slot: Number(select.dataset.slot), recipeId: Number(select.value) })));
+  }
+  for (const button of productionGrid.querySelectorAll("[data-input]")) {
+    button.addEventListener("click", (event) => {
+      if (event.target.closest(".remove-input")) {
+        socket?.send(JSON.stringify({ type: "production_remove_input", slot: Number(button.dataset.slot), inputIndex: Number(button.dataset.input) }));
+      } else {
+        socket?.send(JSON.stringify({ type: "production_place_input", slot: Number(button.dataset.slot), inputIndex: Number(button.dataset.input) }));
+      }
+    });
+  }
+  for (const button of productionGrid.querySelectorAll("[data-output]")) {
+    button.addEventListener("click", () => showOutputBubble(button, Number(button.dataset.slot), Number(button.dataset.output)));
+  }
+  for (const button of productionGrid.querySelectorAll(".detail-button")) {
+    button.addEventListener("click", () => openRecipeDetail(Number(button.dataset.slot)));
+  }
+}
+
+function productionSlotHtml(slot, slotIndex) {
+  const recipe = recipeById(slot.recipeId);
+  const hasOutput = (slot.outputs || []).some(Boolean);
+  return `
+    <article class="production-slot">
+      <label>配方选择
+        <select class="recipe-select" data-slot="${slotIndex}" ${hasOutput ? "disabled" : ""} title="${hasOutput ? "请先处理产物格中的物品" : ""}">
+          <option value="">未选择</option>
+          ${state.productionRecipes.map((entry) => `<option value="${entry.recipe_id}" ${entry.recipe_id === slot.recipeId ? "selected" : ""}>${escapeHtml(entry.label)}</option>`).join("")}
+        </select>
+      </label>
+      <div class="recipe-info">
+        <strong>物品信息</strong>
+        ${recipe ? `<ul>${recipe.recipe.map((id) => `<li>${escapeHtml(itemName(id))}</li>`).join("")}</ul><button class="detail-button" type="button" data-slot="${slotIndex}">详细视图</button>` : "<p>请选择配方</p>"}
+      </div>
+      <div class="input-grid">
+        ${Array.from({ length: 4 }, (_, inputIndex) => productionInputHtml(slot, recipe, slotIndex, inputIndex)).join("")}
+      </div>
+      <div class="output-grid">
+        ${Array.from({ length: 2 }, (_, outputIndex) => productionOutputHtml(slot, slotIndex, outputIndex)).join("")}
+      </div>
+      <div class="production-status">${productionStatus(slot, recipe)}</div>
+    </article>
+  `;
+}
+
+function productionInputHtml(slot, recipe, slotIndex, inputIndex) {
+  const input = slot.inputs?.[inputIndex];
+  const requiredId = recipe?.recipe?.[inputIndex];
+  const disabled = !requiredId ? "disabled" : "";
+  const item = input ? itemById(input.id) : requiredId ? itemById(requiredId) : null;
+  return `
+    <button class="production-cell input-cell" type="button" data-slot="${slotIndex}" data-input="${inputIndex}" ${disabled}>
+      ${input ? `<span class="remove-input" title="取出">×</span><img src="${item.image}" alt="" /><small>${escapeHtml(item.name)}</small>` : requiredId ? `<span class="plus">+</span><small>${escapeHtml(item.name)}</small>` : ""}
+    </button>
+  `;
+}
+
+function productionOutputHtml(slot, slotIndex, outputIndex) {
+  const output = slot.outputs?.[outputIndex];
+  const item = output ? itemById(output.id) : null;
+  return `
+    <button class="production-cell output-cell" type="button" data-slot="${slotIndex}" data-output="${outputIndex}" ${output ? "" : "disabled"}>
+      ${output ? `<img src="${item.image}" alt="" /><small>${escapeHtml(item.name)} x${formatNumber(output.count)}</small>` : ""}
+    </button>
+  `;
+}
+
+function productionStatus(slot, recipe) {
+  if (!recipe) return "";
+  const ready = recipe.recipe.every((id, index) => slot.inputs?.[index]?.id === id);
+  if (!ready) return "放齐需求物品后开始生产";
+  const products = recipe.products.filter(Boolean).map((product) => `${itemName(product.id)}: ${Math.round(product.probability * 100)}%`).join(", ");
+  return `配方生效，生产中。${products}`;
+}
+
+function openRecipeDetail(slotIndex) {
+  const recipe = recipeById(state.production.slots?.[slotIndex]?.recipeId);
+  if (!recipe) return;
+  recipeDetailGrid.innerHTML = recipe.recipe.map((id) => {
+    const item = itemById(id);
+    const entry = state.profileItems[id] || {};
+    return `
+      <article class="item-card detail-card" style="--rarity-color:${rarityColors[item.rarity] || rarityColors.gray}">
+        <div class="item-heading"><span class="item-name">${escapeHtml(item.name)}</span><span class="item-type">${escapeHtml(item.typeLabel)}</span></div>
+        <img class="item-image" src="${item.image}" alt="" />
+        <button class="heart ${entry.collected ? "collected" : ""}" data-heart="${id}">♥</button>
+        <div class="count">x${formatNumber(entry.count || 0)}</div>
+      </article>
+    `;
+  }).join("");
+  bindHeartButtons(recipeDetailGrid);
+  recipeDialog.showModal();
+}
+
+function bindHeartButtons(root) {
+  for (const heart of root.querySelectorAll(".heart")) {
+    heart.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      socket?.send(JSON.stringify({ type: "toggle_favorite", itemId: Number(heart.dataset.heart) }));
+    });
+  }
+}
+
+function applyFavoriteState(itemId, collected) {
+  const key = String(itemId);
+  if (!state.profileItems[key]) state.profileItems[key] = { count: 0, collected: false };
+  state.profileItems[key].collected = collected;
+  for (const heart of document.querySelectorAll(`.heart[data-heart="${CSS.escape(key)}"]`)) {
+    heart.classList.toggle("collected", collected);
+  }
+}
+
+function showOutputBubble(anchor, slot, outputIndex) {
+  const output = state.production.slots?.[slot]?.outputs?.[outputIndex];
+  if (!output) return;
+  const item = itemById(output.id);
+  outputBubble.innerHTML = `
+    <button class="bubble-close" type="button">×</button>
+    <strong>${escapeHtml(item.name)} x${formatNumber(output.count)}</strong>
+    <div class="bubble-actions">
+      <button type="button" data-mode="take">拿去</button>
+      <button type="button" data-mode="sell">出售</button>
+    </div>
+  `;
+  const rect = anchor.getBoundingClientRect();
+  outputBubble.style.left = `${rect.left + rect.width / 2}px`;
+  outputBubble.style.top = `${rect.top - 8}px`;
+  outputBubble.hidden = false;
+  outputBubble.querySelector(".bubble-close").addEventListener("click", () => (outputBubble.hidden = true));
+  for (const button of outputBubble.querySelectorAll("[data-mode]")) {
+    button.addEventListener("click", () => {
+      outputBubble.hidden = true;
+      socket?.send(JSON.stringify({ type: "production_collect", slot, outputIndex, mode: button.dataset.mode }));
+    });
   }
 }
 
@@ -184,6 +390,48 @@ function sellSelected(quantity) {
     return;
   }
   socket?.send(JSON.stringify({ type: "sell_items", itemIds: [...state.selected].map(Number), quantity }));
+}
+
+function normalizeRecipes(entries) {
+  return entries
+    .map((entry) => {
+      const recipe = (entry.recipe || []).map(Number).filter((id) => state.itemMap.has(id)).slice(0, 4);
+      const products = Array.isArray(entry.products)
+        ? entry.products
+        : Object.entries(entry.product || {}).slice(0, 2).map(([id, probability]) => ({ id: Number(id), probability: Number(probability) || 0 }));
+      const normalizedProducts = products.filter((product) => product && state.itemMap.has(Number(product.id))).map((product) => ({ id: Number(product.id), probability: Math.max(0, Math.min(1, Number(product.probability) || 0)) }));
+      const label = entry.label || `${recipe.map(itemName).join(", ")} - ${normalizedProducts.map((product) => itemName(product.id)).join(", ")}`;
+      return { recipe_id: Number(entry.recipe_id), recipe, products: normalizedProducts, label };
+    })
+    .filter((entry) => Number.isInteger(entry.recipe_id) && entry.recipe.length && entry.products.length)
+    .sort((a, b) => a.recipe_id - b.recipe_id);
+}
+
+function findRawRecipe(raw, recipeId) {
+  if (Array.isArray(raw)) return raw.find((entry) => Number(entry.recipe_id) === recipeId);
+  if (Number(raw?.recipe_id) === recipeId) return raw;
+  return Object.values(raw || {}).find((entry) => Number(entry.recipe_id) === recipeId);
+}
+
+function extractProductOrder(text) {
+  const result = new Map();
+  const pattern = /"recipe_id"\s*:\s*(\d+)[\s\S]*?"product"\s*:\s*\{([\s\S]*?)\}/g;
+  for (const match of text.matchAll(pattern)) {
+    result.set(Number(match[1]), [...match[2].matchAll(/"([^"]+)"\s*:/g)].map((entry) => Number(entry[1])).filter(Number.isInteger));
+  }
+  return result;
+}
+
+function recipeById(id) {
+  return state.productionRecipes.find((entry) => entry.recipe_id === Number(id));
+}
+
+function itemById(id) {
+  return state.itemMap.get(Number(id)) || { id, name: `#${id}`, typeLabel: "", rarity: "gray", price: 0, image: `/resource/auction/${id}.png` };
+}
+
+function itemName(id) {
+  return itemById(id).name;
 }
 
 function buildFilters() {

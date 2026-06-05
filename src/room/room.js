@@ -4,14 +4,18 @@ import { loadDefinitions } from "../game/definitions.js";
 import { validateSelections } from "../game/GameSession.js";
 import { loadItemsById } from "../items/items.js";
 import {
+  addMoney,
+  addProfileItem,
   buyProfileProps,
   deductMoney,
   ensureProfile,
+  removeProfileItem,
   saveProfileByNickname,
   sellProfileItems,
   toggleFavorite,
 } from "../player/profile.js";
 import { acceptWebSocket, decodeWsText, sendWsJson } from "../net/websocket.js";
+import { loadProductionRecipes, normalizeProductionState } from "../production/production.js";
 
 const MAX_PLAYERS = 4;
 const HEARTBEAT_TIMEOUT_MS = 20_000;
@@ -22,6 +26,8 @@ export function createRoom({ rootDir, onGameStart }) {
   const characterDefinitions = loadDefinitions(rootDir, "characters.csv");
   const propDefinitions = loadDefinitions(rootDir, "props.csv");
   const itemsById = loadItemsById(rootDir);
+  const productionRecipes = loadProductionRecipes(rootDir, itemsById);
+  const maxPlayers = loadMaxPlayers(rootDir);
   const containers = loadContainers(rootDir);
   let currentContainer = pickContainer(containers);
   let gameInProgress = false;
@@ -44,7 +50,7 @@ export function createRoom({ rootDir, onGameStart }) {
     const resumeId = requestUrl.searchParams.get("playerId");
     if (resumeId) {
       let player = players.get(resumeId);
-      if (!player && disconnectedPlayers.has(resumeId) && players.size < MAX_PLAYERS) {
+      if (!player && disconnectedPlayers.has(resumeId) && players.size < maxPlayers) {
         player = disconnectedPlayers.get(resumeId);
         disconnectedPlayers.delete(resumeId);
         player.socket = socket;
@@ -63,7 +69,7 @@ export function createRoom({ rootDir, onGameStart }) {
     if (existing) {
       return reject(socket, "房间内已经有同昵称玩家");
     }
-    if (players.size >= MAX_PLAYERS) return reject(socket, "房间已满");
+    if (players.size >= maxPlayers) return reject(socket, "房间已满");
 
     const profile = ensureProfile(rootDir, nickname);
     const player = {
@@ -167,7 +173,7 @@ export function createRoom({ rootDir, onGameStart }) {
 
   function resolvePlayerForSideConnection(playerId, socket) {
     let player = players.get(playerId);
-    if (!player && disconnectedPlayers.has(playerId) && players.size < MAX_PLAYERS) {
+    if (!player && disconnectedPlayers.has(playerId) && players.size < maxPlayers) {
       player = disconnectedPlayers.get(playerId);
       disconnectedPlayers.delete(playerId);
       player.socket = socket;
@@ -287,6 +293,33 @@ export function createRoom({ rootDir, onGameStart }) {
         sendWsJson(socket, { type: "sell_result", body: result });
         sendWarehouseState(player, socket);
         broadcastRoomState();
+        return;
+      }
+      if (message.type === "production_set_recipe") {
+        setProductionRecipe(player, Number(message.slot), Number(message.recipeId));
+        saveProfileByNickname(rootDir, player.profile);
+        sendWarehouseState(player, socket);
+        return;
+      }
+      if (message.type === "production_place_input") {
+        placeProductionInput(player, Number(message.slot), Number(message.inputIndex));
+        saveProfileByNickname(rootDir, player.profile);
+        sendWarehouseState(player, socket);
+        return;
+      }
+      if (message.type === "production_remove_input") {
+        removeProductionInput(player, Number(message.slot), Number(message.inputIndex));
+        saveProfileByNickname(rootDir, player.profile);
+        sendWarehouseState(player, socket);
+        return;
+      }
+      if (message.type === "production_collect") {
+        const result = collectProductionOutput(player, Number(message.slot), Number(message.outputIndex), message.mode);
+        saveProfileByNickname(rootDir, player.profile);
+        sendWsJson(socket, { type: "production_collect_result", body: result });
+        sendWarehouseState(player, socket);
+        broadcastRoomState();
+        return;
       }
     } catch (error) {
       sendWsJson(socket, { type: "error", message: error.message });
@@ -341,6 +374,8 @@ export function createRoom({ rootDir, onGameStart }) {
         items: player.profile.warehouse.items,
         props: player.profile.warehouse.props,
         propDefinitions: Object.fromEntries(propDefinitions),
+        production: normalizeProductionState(player.profile.production),
+        productionRecipes,
       },
     });
   }
@@ -355,10 +390,71 @@ export function createRoom({ rootDir, onGameStart }) {
     });
   }
 
+  function setProductionRecipe(player, slotIndex, recipeId) {
+    const slot = getProductionSlot(player, slotIndex);
+    if (slot.outputs.some(Boolean)) throw new Error("请先处理产出格中的物品");
+    for (const input of slot.inputs) if (input) addProfileItem(player.profile, input.id, input.count);
+    if (!recipeId) {
+      slot.recipeId = null;
+      slot.inputs = [null, null, null, null];
+      return;
+    }
+    const recipe = productionRecipes.find((entry) => entry.recipe_id === recipeId);
+    if (!recipe) throw new Error("未知生产配方");
+    slot.recipeId = recipe.recipe_id;
+    slot.inputs = [null, null, null, null];
+  }
+
+  function placeProductionInput(player, slotIndex, inputIndex) {
+    const slot = getProductionSlot(player, slotIndex);
+    const recipe = productionRecipes.find((entry) => entry.recipe_id === slot.recipeId);
+    if (!recipe) throw new Error("请先选择配方");
+    if (!Number.isInteger(inputIndex) || inputIndex < 0 || inputIndex >= 4) throw new Error("生产格无效");
+    const itemId = recipe.recipe[inputIndex];
+    if (!itemId) throw new Error("该配方不需要这个格子");
+    if (slot.inputs[inputIndex]) throw new Error("该生产格已经放入物品");
+    removeProfileItem(player.profile, itemId, 1);
+    slot.inputs[inputIndex] = { id: itemId, count: 1 };
+  }
+
+  function removeProductionInput(player, slotIndex, inputIndex) {
+    const slot = getProductionSlot(player, slotIndex);
+    if (!Number.isInteger(inputIndex) || inputIndex < 0 || inputIndex >= 4) throw new Error("生产格无效");
+    const input = slot.inputs[inputIndex];
+    if (!input) return;
+    addProfileItem(player.profile, input.id, input.count);
+    slot.inputs[inputIndex] = null;
+  }
+
+  function collectProductionOutput(player, slotIndex, outputIndex, mode = "take") {
+    const slot = getProductionSlot(player, slotIndex);
+    if (!Number.isInteger(outputIndex) || outputIndex < 0 || outputIndex >= 2) throw new Error("产物格无效");
+    const output = slot.outputs[outputIndex];
+    if (!output || output.count <= 0) throw new Error("该产物格为空");
+    const item = itemsById.get(output.id);
+    if (!item) throw new Error("未知产物");
+    const result = { mode, itemId: output.id, count: output.count, itemName: item.name, total: 0, money: player.profile.money };
+    if (mode === "sell") {
+      result.total = output.count * Number(item.price || 0);
+      addMoney(player.profile, result.total);
+      result.money = player.profile.money;
+    } else {
+      addProfileItem(player.profile, output.id, output.count);
+    }
+    slot.outputs[outputIndex] = null;
+    return result;
+  }
+
+  function getProductionSlot(player, slotIndex) {
+    player.profile.production = normalizeProductionState(player.profile.production);
+    if (!Number.isInteger(slotIndex) || slotIndex < 0 || slotIndex >= player.profile.production.slots.length) throw new Error("生产槽无效");
+    return player.profile.production.slots[slotIndex];
+  }
+
   function roomSnapshot(viewerId) {
     const hostId = getHostId();
     return {
-      maxPlayers: MAX_PLAYERS,
+      maxPlayers,
       hostId,
       viewerId,
       canStart: canStart(),
@@ -505,6 +601,16 @@ function normalizeNickname(nickname) {
 
 function isSocketClosed(socket) {
   return !socket || socket.destroyed || socket.closed;
+}
+
+function loadMaxPlayers(rootDir) {
+  try {
+    const config = JSON.parse(fs.readFileSync(path.join(rootDir, "config.json"), "utf8"));
+    const value = Math.floor(Number(config.game?.max_players) || MAX_PLAYERS);
+    return Math.max(1, Math.min(6, value));
+  } catch {
+    return MAX_PLAYERS;
+  }
 }
 
 function loadContainers(rootDir) {

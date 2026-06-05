@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { normalizeProductionState } from "../production/production.js";
 
 export const INITIAL_MONEY = 5_000_000;
 const DEFAULT_PROPS = {};
@@ -41,6 +42,26 @@ export function addWarehouseItemsToProfile(profile, warehouseItems) {
     if (!profile.warehouse.items[key]) profile.warehouse.items[key] = { count: 0, collected: false };
     profile.warehouse.items[key].count += 1;
   }
+}
+
+export function addProfileItem(profile, itemId, count = 1) {
+  normalizeProfile(profile, profile.nickname);
+  const id = Number(itemId);
+  const amount = Math.max(1, Math.floor(Number(count) || 1));
+  const key = String(id);
+  if (!profile.warehouse.items[key]) profile.warehouse.items[key] = { count: 0, collected: false };
+  profile.warehouse.items[key].count += amount;
+}
+
+export function removeProfileItem(profile, itemId, count = 1) {
+  normalizeProfile(profile, profile.nickname);
+  const id = Number(itemId);
+  const amount = Math.max(1, Math.floor(Number(count) || 1));
+  const key = String(id);
+  const entry = profile.warehouse.items[key];
+  if (!entry || entry.count < amount) throw new Error(`物品数量不足: ${id}`);
+  entry.count -= amount;
+  if (entry.count <= 0) delete profile.warehouse.items[key];
 }
 
 export function addMoney(profile, amount) {
@@ -136,6 +157,7 @@ function createProfile(nickname) {
       items: {},
       props: { ...DEFAULT_PROPS },
     },
+    production: normalizeProductionState(),
     settings: {
       propLoadout: [null, null, null, null, null],
     },
@@ -148,6 +170,7 @@ function normalizeProfile(profile, nickname) {
   if (!profile.warehouse || typeof profile.warehouse !== "object") profile.warehouse = {};
   if (!profile.warehouse.items || typeof profile.warehouse.items !== "object") profile.warehouse.items = {};
   if (!profile.warehouse.props || typeof profile.warehouse.props !== "object") profile.warehouse.props = {};
+  profile.production = normalizeProductionState(profile.production);
   if (!profile.settings || typeof profile.settings !== "object") profile.settings = {};
   if (!Array.isArray(profile.settings.propLoadout)) profile.settings.propLoadout = [null, null, null, null, null];
   for (const [id, count] of Object.entries(DEFAULT_PROPS)) {

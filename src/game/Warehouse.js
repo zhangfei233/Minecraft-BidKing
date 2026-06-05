@@ -5,18 +5,15 @@ export class Warehouse {
   static MAX_ROWS = 40;
   static VIEW_COUNT = 4;
 
-  constructor({ rootDir, random = Math.random } = {}) {
+  constructor({ rootDir, random = Math.random, viewCount = Warehouse.VIEW_COUNT } = {}) {
     if (!rootDir) throw new Error("Warehouse requires rootDir");
     this.rootDir = rootDir;
     this.random = random;
     this.itemDefinitions = loadItemsById(rootDir);
     this.items = [emptyItem()];
     this.grid = createGrid(0);
-    this.view1 = createView();
-    this.view2 = createView();
-    this.view3 = createView();
-    this.view4 = createView();
-    this.views = [this.view1, this.view2, this.view3, this.view4];
+    this.viewCount = clampViewCount(viewCount);
+    this.resetViews();
   }
 
   get width() {
@@ -267,11 +264,8 @@ export class Warehouse {
   }
 
   resetViews() {
-    this.view1 = createView();
-    this.view2 = createView();
-    this.view3 = createView();
-    this.view4 = createView();
-    this.views = [this.view1, this.view2, this.view3, this.view4];
+    this.views = Array.from({ length: this.viewCount }, () => createView());
+    for (let index = 0; index < this.views.length; index += 1) this[`view${index + 1}`] = this.views[index];
   }
 
   normalizeHint(hint) {
@@ -509,6 +503,11 @@ function createView() {
     rarityKnown: createGrid(false),
     outlineKnown: createGrid(false),
   };
+}
+
+function clampViewCount(value) {
+  const count = Math.floor(Number(value) || Warehouse.VIEW_COUNT);
+  return Math.max(1, Math.min(6, count));
 }
 
 function createGrid(value) {
