@@ -1,0 +1,52 @@
+[
+  {
+    "consume": 2715,
+    "outcome": 8,
+    "pool": "class=item&&(rarity=gray||rarity=green)"
+  },
+  {
+    "consume": 2716,
+    "outcome": 4,
+    "pool": "class=item&&(rarity=blue||rarity=green)"
+  },
+  {
+    "consume": 2717,
+    "outcome": 8,
+    "pool": "class=item&&(rarity=blue||rarity=green)"
+  },
+  {
+    "consume": 2718,
+    "outcome": 5,
+    "pool": "class=item&&(rarity=blue||rarity=purple)"
+  },
+  {
+    "consume": 2719,
+    "outcome": 9,
+    "pool": "class=item&&(rarity=blue||rarity=purple)"
+  },
+  {
+    "consume": 2720,
+    "outcome": 5,
+    "pool": "class=item&&(rarity=purple||rarity=gold)"
+  },
+  {
+    "consume": 2721,
+    "outcome": 5,
+    "pool": "class=prop&&(rarity=green||rarity=blue||rarity=purple)"
+  },
+  {
+    "consume": 2722,
+    "outcome": 4,
+    "pool": "class=prop&&(rarity=red||rarity=gold||rarity=purple)"
+  },
+  {
+    "consume": 2723,
+    "outcome": 3,
+    "pool": "class=item&&rarity=red"
+  },
+  {
+    "consume": 2724,
+    "outcome": 4,
+    "pool": "class=item&&(rarity=red||rarity=gold)"
+  }
+]

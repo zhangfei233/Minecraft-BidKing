@@ -32,10 +32,12 @@
 
       <section class="content">
         <header class="topbar">
+          <button id="contentBackButton" type="button" hidden>返回</button>
           <select id="kindSelect">
             <option value="items">战利品</option>
             <option value="props">道具</option>
             <option value="production">车间</option>
+            <option value="lottery">抽奖</option>
           </select>
           <select id="sortSelect">
             <option value="name_asc">名称升序</option>
@@ -54,6 +56,7 @@
         <div id="message" class="message"></div>
         <div class="items-grid" id="itemsGrid"></div>
         <div class="production-grid" id="productionGrid" hidden></div>
+        <div class="lottery-panel" id="lotteryPanel" hidden></div>
       </section>
     </main>
     <dialog id="recipeDialog" class="recipe-dialog">

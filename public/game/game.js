@@ -25,6 +25,7 @@ let bidInput = "";
 let propDefinitions = {};
 let carriedProps = [];
 let characterDefinitions = {};
+let clientItems = new Map();
 let currentMoney = 0;
 let settlementFinalBid = 0;
 let hasBidThisRound = false;
@@ -46,7 +47,10 @@ document.addEventListener("pointerdown", (event) => {
   if (event.target.closest("button, a")) playSound("click");
 }, true);
 document.addEventListener("warehouse-image-loaded", () => renderer.render());
-loadClientItems().then((items) => renderer.setItems(items));
+loadClientItems().then((items) => {
+  clientItems = items;
+  renderer.setItems(items);
+});
 renderer.onValueChange = updateKnownLootValue;
 connectGameSocket();
 setupBidPanel();
@@ -315,6 +319,7 @@ function showSettlement(body) {
   renderer.onValueChange = (value) => updateSettlementValues(value);
   renderSettlementInfo(body);
   renderCopiedItems(body.copiedItems || []);
+  renderExtraRewards(body.extraRewardsByPlayer?.[myId] || []);
   playSound("firework");
   renderer.animateFullWarehouse(body.warehouseItems || [], 10000).then(() => revealDividend(body));
 }
@@ -384,12 +389,14 @@ function renderCopiedItems(copiedItems) {
     grouped.get(entry.nickname).push(entry.item);
   }
   for (const [nickname, items] of grouped) {
+    const totalValue = items.reduce((sum, item) => sum + Number(item.price || 0), 0);
     const el = document.createElement("article");
     el.className = "notice copied-loot-notice";
     el.innerHTML = `
       <div class="notice-icon"><img src="/resource/system_message.png" alt="" /></div>
       <div>
         <strong>${escapeHtml(nickname)}复制了以下物品：</strong>
+        <span>总价值：${formatNumber(totalValue)}</span>
         <div class="copied-loot-grid">
           ${items.map((item) => `
             <div class="copied-loot-card" style="--rarity-color:${rarityColors[item.rarity] || rarityColors.gray}">
@@ -402,6 +409,20 @@ function renderCopiedItems(copiedItems) {
     `;
     noticeList.appendChild(el);
   }
+}
+
+function renderExtraRewards(rewards) {
+  const returnButton = document.querySelector("#returnRoomButton");
+  if (!returnButton) return;
+  let el = document.querySelector("#extraRewardText");
+  if (!el) {
+    el = document.createElement("p");
+    el.id = "extraRewardText";
+    el.className = "extra-reward-text";
+    returnButton.insertAdjacentElement("afterend", el);
+  }
+  const names = (rewards || []).map((item) => item.name || clientItems.get(Number(item.id))?.name || `#${item.id}`);
+  el.textContent = names.length ? `额外获得奖励：${names.join(", ")}` : "";
 }
 
 function revealDividend(body) {
@@ -601,5 +622,5 @@ function escapeHtml(value) {
 
 function propColor(prop) {
   if (!prop) return "rgba(0,0,0,0.42)";
-  return rarityColors[levelRarities[Math.max(0, Math.min(5, (Number(prop.level) || 1) - 1))] || "gray"];
+  return rarityColors[prop.rarity || levelRarities[Math.max(0, Math.min(5, (Number(prop.level) || 1) - 1))] || "gray"];
 }

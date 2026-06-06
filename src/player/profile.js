@@ -1,9 +1,15 @@
 import fs from "node:fs";
 import path from "node:path";
+import { normalizeLotteryState } from "../lottery/lottery.js";
 import { normalizeProductionState } from "../production/production.js";
 
 export const INITIAL_MONEY = 5_000_000;
 const DEFAULT_PROPS = {};
+const DEFAULT_ITEMS = {
+  681: { count: 1, collected: false },
+  2718: { count: 1, collected: false },
+  2721: { count: 1, collected: false },
+};
 
 export function ensureProfile(rootDir, nickname) {
   const savesDir = path.join(rootDir, "saves");
@@ -154,12 +160,14 @@ function createProfile(nickname) {
     nickname,
     money: INITIAL_MONEY,
     warehouse: {
-      items: {},
+      items: structuredClone(DEFAULT_ITEMS),
       props: { ...DEFAULT_PROPS },
     },
     production: normalizeProductionState(),
+    lottery: normalizeLotteryState(),
     settings: {
       propLoadout: [null, null, null, null, null],
+      warehouseNotifications: { production: false, lottery: false },
     },
   };
 }
@@ -171,8 +179,14 @@ function normalizeProfile(profile, nickname) {
   if (!profile.warehouse.items || typeof profile.warehouse.items !== "object") profile.warehouse.items = {};
   if (!profile.warehouse.props || typeof profile.warehouse.props !== "object") profile.warehouse.props = {};
   profile.production = normalizeProductionState(profile.production);
+  profile.lottery = normalizeLotteryState(profile.lottery);
   if (!profile.settings || typeof profile.settings !== "object") profile.settings = {};
   if (!Array.isArray(profile.settings.propLoadout)) profile.settings.propLoadout = [null, null, null, null, null];
+  if (!profile.settings.warehouseNotifications || typeof profile.settings.warehouseNotifications !== "object") {
+    profile.settings.warehouseNotifications = {};
+  }
+  profile.settings.warehouseNotifications.production = Boolean(profile.settings.warehouseNotifications.production);
+  profile.settings.warehouseNotifications.lottery = Boolean(profile.settings.warehouseNotifications.lottery);
   for (const [id, count] of Object.entries(DEFAULT_PROPS)) {
     if (!Number.isInteger(profile.warehouse.props[id])) profile.warehouse.props[id] = count;
   }

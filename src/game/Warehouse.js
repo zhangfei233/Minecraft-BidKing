@@ -81,12 +81,13 @@ export class Warehouse {
     });
   }
 
-  generate(k = 1.0) {
+  generate(k = 1.0, { entryFee = 0 } = {}) {
     const config = loadConfig(this.rootDir).warehouse;
     const pool = buildWeightedPool(loadItems(this.rootDir), config, k);
+    const mean = Number(config.volume_normal_mean || 0) + Math.ceil(Math.max(0, Number(entryFee) || 0) / 1000);
     const targetVolume = randomNormalInt(
       this.random,
-      config.volume_normal_mean,
+      mean,
       config.volume_normal_stddev,
       config.volume_min,
       config.volume_max,

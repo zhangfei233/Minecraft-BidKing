@@ -70,6 +70,10 @@ const server = http.createServer((req, res) => {
     const productionPath = path.join(ROOT, "production.json");
     return fs.existsSync(productionPath) ? sendFile(res, productionPath) : sendJson(res, []);
   }
+  if (requestUrl.pathname === "/lottery.json") {
+    const lotteryPath = path.join(ROOT, "lottery.json");
+    return fs.existsSync(lotteryPath) ? sendFile(res, lotteryPath) : sendJson(res, []);
+  }
 
   for (const prefix of ["/room/", "/wiki/", "/game/", "/settlement/", "/test_warehouse/", "/warehouse/", "/shop/", "/common/"]) {
     if (requestUrl.pathname.startsWith(prefix)) return serveStatic(res, PUBLIC_DIR, requestUrl.pathname.slice(1));

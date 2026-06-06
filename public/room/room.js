@@ -286,7 +286,7 @@ function escapeHtml(value) {
 
 function propColor(prop) {
   if (!prop) return "rgba(13, 16, 18, 0.7)";
-  return rarityColors[levelRarities[Math.max(0, Math.min(5, (Number(prop.level) || 1) - 1))] || "gray"];
+  return rarityColors[prop.rarity || levelRarities[Math.max(0, Math.min(5, (Number(prop.level) || 1) - 1))] || "gray"];
 }
 
 function preloadSound(name) {

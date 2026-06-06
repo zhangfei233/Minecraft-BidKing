@@ -29,7 +29,7 @@ id,name,type,description,rarity,height,width,price
 28,盔甲纹饰锻造模板,decoration;loot,,purple,1,1,38934
 29,蓝色鸡蛋,decoration,,green,2,2,4200
 30,蓝色染料,natural;decoration,,gray,2,2,1188
-31,烈焰棒,magic;loot,,gold,4,5,559106
+31,烈焰棒,magic;loot,,purple,5,1,55910
 32,绿宝石,ore,,purple,1,1,26649
 33,绿色染料,natural;decoration,,gray,2,2,1260
 34,煤炭,ore,,green,1,1,2948
@@ -757,7 +757,7 @@ id,name,type,description,rarity,height,width,price
 756,蜘蛛骑士,mob,,purple,2,3,71526
 757,猪灵蛮兵,mob,,blue,2,3,20039
 758,被激活的TNT,tech,,blue,2,2,17922
-759,凋灵之首,magic,,red,4,3,1529470
+759,凋灵之首,magic;mob,,red,4,3,1529470
 760,经验球,decoration,,green,2,2,3990
 761,末影龙火球,magic,,red,2,5,1483586
 762,闪电束,decoration,,green,2,2,4410
@@ -2713,3 +2713,13 @@ id,name,type,description,rarity,height,width,price
 2712,无尽护腿,equipment;tech;magic,,red,5,3,7777777
 2713,无尽靴子,equipment;tech;magic,,red,2,2,7777777
 2714,中子态素块,ore,,gold,5,5,555555
+2715,普通战利品袋,loot,【抽奖】可开出大量低价值战利品,gray,1,1,1000
+2716,稀有战利品袋,loot,【抽奖】可开出中价值战利品,gray,2,1,2000
+2717,史诗战利品袋,loot,【抽奖】可开出大量中价值战利品,green,2,2,2000
+2718,传说战利品袋,loot,【抽奖】可开出高价值战利品,blue,3,2,1000
+2719,特殊战利品袋,loot,【抽奖】可开出大量高价值战利品,purple,4,2,2000
+2720,限定战利品袋,loot,【抽奖】可开出价值连城的战利品,gold,5,2,1000
+2721,道具盒,loot,【抽奖】可开出常见的道具,blue,3,3,23432
+2722,传说道具盒,loot,【抽奖】可开出珍贵的道具,gold,3,4,178871
+2723,D20,loot,【抽奖】可开出红色稀有度的战利品,red,3,3,666666
+2724,D6,loot,【抽奖】可开出金色和红色稀有度的战利品,red,2,2,233333

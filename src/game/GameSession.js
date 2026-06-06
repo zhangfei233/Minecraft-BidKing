@@ -1,9 +1,12 @@
+import fs from "node:fs";
+import path from "node:path";
 import { Warehouse } from "./Warehouse.js";
 import { createCharacter } from "./characters.js";
 import { createProp } from "./props.js";
 import { loadDefinitions } from "./definitions.js";
 import {
   addMoney,
+  addProfileItem,
   addWarehouseItemsToProfile,
   deductMoney,
   saveProfileByNickname,
@@ -14,6 +17,7 @@ import { decodeWsText, sendWsJson } from "../net/websocket.js";
 import { itemFullInfoKnown, splitTypes } from "./hints.js";
 import { error as logError } from "../net/logger.js";
 import { loadProductionRecipes, runProduction } from "../production/production.js";
+import { loadLotteryRecipes, lotteryConsumableIds } from "../lottery/lottery.js";
 
 const ROUND_COUNT = 5;
 const ROUND_MS = 62_000;
@@ -24,6 +28,8 @@ const HEARTBEAT_TIMEOUT_MS = 45_000;
 const RARITIES = ["gray", "green", "blue", "purple", "gold", "red"];
 const RARITY_LABELS = { gray: "\u767d", green: "\u7eff", blue: "\u84dd", purple: "\u7d2b", gold: "\u91d1", red: "\u7ea2" };
 const SYSTEM_HINT_TITLE = "\u516c\u5f00\u7684\u6218\u5229\u54c1\u4fe1\u606f";
+const PROP_USE_REWARD_ITEM_ID = 2715;
+const WINNER_REWARD_ITEM_ID = 2716;
 
 export class GameSession {
   constructor({ rootDir, players, container = { name: "大型箱子", k: 1 }, random = Math.random, onFinish = null }) {
@@ -37,11 +43,13 @@ export class GameSession {
     this.allPropDefinitions = new Map([...this.propDefinitions, ...normalizeSpecialProps(this.specialPropDefinitions)]);
     this.itemsById = loadItemsById(rootDir);
     this.productionRecipes = loadProductionRecipes(rootDir, this.itemsById);
+    this.lotteryRecipes = loadLotteryRecipes(loadLotteryRaw(rootDir), this.itemsById, this.propDefinitions);
+    this.lotteryConsumableIds = lotteryConsumableIds(this.lotteryRecipes).map(Number);
     const gameConfig = loadConfig(rootDir).game || {};
     this.systemHintProbability = Number(gameConfig.system_hint_probability ?? 0.3);
     this.dividendRatio = Number(gameConfig.dividend_ratio ?? 0.1);
     this.warehouse = new Warehouse({ rootDir, random, viewCount: players.length });
-    this.warehouse.generate(container.k);
+    this.warehouse.generate(container.k, { entryFee: container.entryFee });
     this.systemHintPool = this.createSystemHintPool();
     this.usedSystemHintIds = new Set();
     this.publicKnown = {
@@ -483,6 +491,9 @@ export class GameSession {
     if (ownBid <= 0) return;
     const matched = this.players.some((entry) => entry.id !== player.id && (entry.bids[roundIndex] || 0) >= ownBid * 0.9 && (entry.bids[roundIndex] || 0) <= ownBid * 1.1);
     if (!matched) return;
+    if (!player.characterState.creeperMatchedRounds) player.characterState.creeperMatchedRounds = [];
+    if (player.characterState.creeperMatchedRounds.includes(roundIndex)) return;
+    player.characterState.creeperMatchedRounds.push(roundIndex);
     player.characterState.creeperMatches = (player.characterState.creeperMatches || 0) + 1;
     const progress = player.characterState.creeperMatches % 2 || 2;
     this.send(player, characterTextHint(`\u76f8\u8fd1\u51fa\u4ef7\u6761\u4ef6\u8fbe\u6210\uff0c\u8fdb\u5ea6 ${progress}/2\u3002`, this.characterDefinitions.get(player.characterId)?.image));
@@ -575,6 +586,8 @@ export class GameSession {
     const finalProfit = winner ? totalValue - finalBid : 0;
     const dividend = winner && finalProfit < 0 ? Math.ceil(Math.abs(finalProfit) * Math.max(0, this.dividendRatio)) : 0;
     this.wonItemCounts = winner ? countItems(warehouseItems) : {};
+    const extraRewardsByPlayer = new Map(this.players.map((player) => [player.id, []]));
+    const lotteryCountsBefore = new Map(this.players.map((player) => [player.id, lotteryItemCount(player.profile, this.lotteryConsumableIds)]));
 
     for (const player of this.players) {
       for (let index = 0; index < player.props.length; index += 1) {
@@ -588,6 +601,10 @@ export class GameSession {
         if (!player.profile.warehouse.items[key]) player.profile.warehouse.items[key] = { count: 0, collected: false };
         player.profile.warehouse.items[key].count += 1;
       }
+      if (player.usedProps.some(Boolean)) {
+        addProfileItem(player.profile, PROP_USE_REWARD_ITEM_ID, 1);
+        extraRewardsByPlayer.get(player.id).push(rewardItem(this.itemsById, PROP_USE_REWARD_ITEM_ID));
+      }
       if (dividend > 0) addMoney(player.profile, dividend);
       saveProfileByNickname(this.rootDir, player.profile);
     }
@@ -595,11 +612,17 @@ export class GameSession {
     if (winner) {
       deductMoney(winner.profile, finalBid);
       addWarehouseItemsToProfile(winner.profile, warehouseItems);
+      addProfileItem(winner.profile, WINNER_REWARD_ITEM_ID, 1);
+      extraRewardsByPlayer.get(winner.id).push(rewardItem(this.itemsById, WINNER_REWARD_ITEM_ID));
       saveProfileByNickname(this.rootDir, winner.profile);
     }
 
     for (const player of this.players) {
-      runProduction(player.profile, this.productionRecipes, this.random);
+      const produced = runProduction(player.profile, this.productionRecipes, this.random);
+      if (produced) setWarehouseNotification(player.profile, "production", true);
+      if (lotteryItemCount(player.profile, this.lotteryConsumableIds) > (lotteryCountsBefore.get(player.id) || 0)) {
+        setWarehouseNotification(player.profile, "lottery", true);
+      }
       saveProfileByNickname(this.rootDir, player.profile);
     }
 
@@ -615,6 +638,7 @@ export class GameSession {
         winner: winner ? publicPlayer(winner) : null,
         favoritesByPlayer: Object.fromEntries(this.players.map((player) => [player.id, favoriteIds(player.profile)])),
         copiedItems: this.players.flatMap((player) => player.copiedItems.map((entry) => ({ ...entry, nickname: player.nickname }))),
+        extraRewardsByPlayer: Object.fromEntries(extraRewardsByPlayer),
       },
     });
   }
@@ -888,6 +912,32 @@ function favoriteIds(profile) {
   return Object.entries(profile.warehouse.items || {})
     .filter(([, entry]) => entry?.collected)
     .map(([id]) => Number(id));
+}
+
+function rewardItem(itemsById, id) {
+  const item = itemsById.get(Number(id));
+  return {
+    id: Number(id),
+    name: item?.name || `#${id}`,
+  };
+}
+
+function lotteryItemCount(profile, itemIds) {
+  return itemIds.reduce((sum, id) => sum + Number(profile.warehouse.items[String(id)]?.count || 0), 0);
+}
+
+function setWarehouseNotification(profile, kind, value) {
+  if (!profile.settings || typeof profile.settings !== "object") profile.settings = {};
+  if (!profile.settings.warehouseNotifications || typeof profile.settings.warehouseNotifications !== "object") {
+    profile.settings.warehouseNotifications = {};
+  }
+  profile.settings.warehouseNotifications[kind] = Boolean(value);
+}
+
+function loadLotteryRaw(rootDir) {
+  const filePath = path.join(rootDir, "lottery.json");
+  if (!fs.existsSync(filePath)) return [];
+  return JSON.parse(fs.readFileSync(filePath, "utf8"));
 }
 
 function randomInt(random, min, max) {

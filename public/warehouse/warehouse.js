@@ -24,16 +24,21 @@ const state = {
   propDefinitions: {},
   production: { slots: [] },
   productionRecipes: [],
+  lottery: { slot: null, results: [] },
+  lotteryRecipes: [],
+  notifications: { production: false, lottery: false },
   selected: new Set(),
   kind: "items",
 };
 
 const itemsGrid = document.querySelector("#itemsGrid");
 const productionGrid = document.querySelector("#productionGrid");
+const lotteryPanel = document.querySelector("#lotteryPanel");
 const moneyValue = document.querySelector("#moneyValue");
 const message = document.querySelector("#message");
 const selectedTotal = document.querySelector("#selectedTotal");
 const kindSelect = document.querySelector("#kindSelect");
+const contentBackButton = document.querySelector("#contentBackButton");
 const sortSelect = document.querySelector("#sortSelect");
 const searchInput = document.querySelector("#searchInput");
 const recipeDialog = document.querySelector("#recipeDialog");
@@ -56,11 +61,19 @@ document.querySelector("#backButton").addEventListener("click", () => {
   const playerId = new URLSearchParams(location.search).get("playerId") || "";
   location.href = `/room${playerId ? `?playerId=${encodeURIComponent(playerId)}` : ""}`;
 });
+contentBackButton?.addEventListener("click", () => {
+  const playerId = new URLSearchParams(location.search).get("playerId") || "";
+  location.href = `/room${playerId ? `?playerId=${encodeURIComponent(playerId)}` : ""}`;
+});
 document.querySelector("#queryButton").addEventListener("click", render);
 kindSelect.addEventListener("change", () => {
   state.kind = kindSelect.value;
   state.selected.clear();
   outputBubble.hidden = true;
+  if ((state.kind === "production" || state.kind === "lottery") && state.notifications[state.kind]) {
+    state.notifications[state.kind] = false;
+    socket?.send(JSON.stringify({ type: "warehouse_clear_notification", kind: state.kind }));
+  }
   render();
 });
 sortSelect.addEventListener("change", render);
@@ -103,6 +116,9 @@ function connectWarehouse() {
       state.propDefinitions = msg.body.propDefinitions || {};
       state.production = msg.body.production || { slots: [] };
       if (Array.isArray(msg.body.productionRecipes) && msg.body.productionRecipes.length) state.productionRecipes = normalizeRecipes(msg.body.productionRecipes);
+      state.lottery = msg.body.lottery || { slot: null, results: [] };
+      state.lotteryRecipes = msg.body.lotteryRecipes || state.lotteryRecipes;
+      state.notifications = msg.body.notifications || { production: false, lottery: false };
       moneyValue.textContent = formatNumber(msg.body.money);
       render();
     }
@@ -113,6 +129,11 @@ function connectWarehouse() {
     if (msg.type === "production_collect_result") {
       const body = msg.body || {};
       showMessage(body.mode === "sell" ? `出售获得了 $${formatNumber(body.total)}` : `将 ${body.itemName} * ${formatNumber(body.count)} 存入了仓库`);
+    }
+    if (msg.type === "lottery_result") showMessage("抽奖完成");
+    if (msg.type === "lottery_collect_result") {
+      const body = msg.body || {};
+      showMessage(body.mode === "take" ? "抽奖结果已存入仓库" : `出售获得了 $${formatNumber(body.total || 0)}`);
     }
     if (msg.type === "error") showMessage(msg.message || "操作失败");
   });
@@ -193,18 +214,101 @@ function currentEntries() {
 
 function render() {
   const productionMode = state.kind === "production";
-  document.querySelector(".warehouse-page").classList.toggle("production-mode", productionMode);
-  document.querySelector(".filters").hidden = productionMode;
-  itemsGrid.hidden = productionMode;
+  const lotteryMode = state.kind === "lottery";
+  document.querySelector(".warehouse-page").classList.toggle("production-mode", productionMode || lotteryMode);
+  document.querySelector(".filters").hidden = productionMode || lotteryMode;
+  itemsGrid.hidden = productionMode || lotteryMode;
   productionGrid.hidden = !productionMode;
+  lotteryPanel.hidden = !lotteryMode;
+  if (contentBackButton) contentBackButton.hidden = !(productionMode || lotteryMode);
+  updateKindOptions();
   document.querySelectorAll("#sortSelect, #selectAllButton, #clearSelectionButton, #selectUnfavoriteButton, #sellAllButton, #sellPartialButton, #toggleFavoriteButton")
-    .forEach((element) => (element.hidden = productionMode));
+    .forEach((element) => (element.hidden = productionMode || lotteryMode));
   if (productionMode) {
     selectedTotal.textContent = "";
     renderProduction();
+  } else if (lotteryMode) {
+    selectedTotal.textContent = "";
+    renderLottery();
   } else {
     renderInventory();
   }
+}
+
+function updateKindOptions() {
+  const labels = {
+    items: "\u6218\u5229\u54c1",
+    props: "\u9053\u5177",
+    production: "\u8f66\u95f4",
+    lottery: "\u62bd\u5956",
+  };
+  for (const option of kindSelect.options) {
+    const value = option.value;
+    const marked = (value === "production" && state.notifications.production) || (value === "lottery" && state.notifications.lottery);
+    option.textContent = marked ? `*${labels[value] || value}*` : labels[value] || value;
+    option.classList.toggle("has-update", marked);
+  }
+}
+
+function renderLottery() {
+  const hasResults = (state.lottery.results || []).length > 0;
+  const consumables = lotteryConsumableIds();
+  const heldCount = consumables.reduce((sum, id) => sum + Number(state.profileItems[id]?.count || 0), 0);
+  const slotItem = state.lottery.slot ? itemById(state.lottery.slot.id) : null;
+  const totalValue = lotteryResultTotalValue(state.lottery.results || []);
+  lotteryPanel.innerHTML = `
+    <section class="lottery-left">
+      <button id="favoriteLotteryButton" type="button">一键收藏抽奖道具</button>
+      <p>${heldCount > 0 ? `当前有 ${formatNumber(heldCount)} 个抽奖道具` : "当前无抽奖道具"}</p>
+      <div class="lottery-consume-slot">${slotItem ? `<img src="${slotItem.image}" alt="" /><strong>${escapeHtml(slotItem.name)}</strong>` : "<span>+</span>"}</div>
+      <button id="drawLotteryButton" type="button" ${!state.lottery.slot || hasResults ? "disabled" : ""}>抽奖</button>
+      <button id="refillLotteryButton" type="button" ${heldCount <= 0 || state.lottery.slot || hasResults ? "disabled" : ""}>补充道具</button>
+    </section>
+    <section class="lottery-results">
+      <div class="lottery-result-grid">${(state.lottery.results || []).map(lotteryResultCard).join("")}</div>
+      <footer>
+        <strong>总价值: ${formatNumber(totalValue)}</strong>
+        <button id="takeLotteryButton" type="button" ${hasResults ? "" : "disabled"}>领取</button>
+        <button id="sellLotteryButton" type="button" ${hasResults ? "" : "disabled"}>出售</button>
+        <button id="sellUnfavoriteLotteryButton" type="button" ${hasResults ? "" : "disabled"}>出售非收藏</button>
+      </footer>
+    </section>
+  `;
+  document.querySelector("#favoriteLotteryButton").addEventListener("click", () => socket?.send(JSON.stringify({ type: "lottery_favorite_consumes" })));
+  document.querySelector("#drawLotteryButton").addEventListener("click", () => socket?.send(JSON.stringify({ type: "lottery_draw" })));
+  document.querySelector("#refillLotteryButton").addEventListener("click", () => socket?.send(JSON.stringify({ type: "lottery_refill" })));
+  document.querySelector("#takeLotteryButton").addEventListener("click", () => socket?.send(JSON.stringify({ type: "lottery_collect", mode: "take" })));
+  document.querySelector("#sellLotteryButton").addEventListener("click", () => socket?.send(JSON.stringify({ type: "lottery_collect", mode: "sell" })));
+  document.querySelector("#sellUnfavoriteLotteryButton").addEventListener("click", () => socket?.send(JSON.stringify({ type: "lottery_collect", mode: "sell_unfavorite" })));
+}
+
+function lotteryResultCard(result) {
+  const data = lotteryResultData(result);
+  return `
+    <article class="lottery-result-card" style="--rarity-color:${rarityColors[data.rarity] || rarityColors.gray}">
+      ${data.image ? `<img src="${data.image}" alt="" />` : ""}
+      <strong>${escapeHtml(data.name)}</strong>
+      <small>${formatNumber(data.price)}</small>
+      <span class="count">x${formatNumber(result.count)}</span>
+    </article>
+  `;
+}
+
+function lotteryResultData(result) {
+  if (String(result.class).toLowerCase() === "prop") {
+    const prop = state.propDefinitions[result.id] || {};
+    return { name: prop.name || result.id, image: prop.image || "", rarity: prop.rarity || levelRarities[Math.max(0, Math.min(5, (Number(prop.level) || 1) - 1))], price: Number(prop.price || 0) };
+  }
+  const item = itemById(result.id);
+  return { name: item.name, image: item.image, rarity: item.rarity, price: Number(item.price || 0), collected: state.profileItems[result.id]?.collected };
+}
+
+function lotteryResultTotalValue(results) {
+  return results.reduce((sum, result) => sum + lotteryResultData(result).price * Number(result.count || 0), 0);
+}
+
+function lotteryConsumableIds() {
+  return [...new Set((state.lotteryRecipes || []).map((recipe) => Number(recipe.consume)).filter(Boolean))];
 }
 
 function renderInventory() {
@@ -243,8 +347,10 @@ function renderProduction() {
       <h2>生产车间</h2>
       <p>利用战利品产生更多战利品!</p>
     </div>
+    <button class="production-favorite-button" id="favoriteProductionButton" type="button">&#x4e00;&#x952e;&#x6536;&#x85cf;</button>
     ${slots.map((slot, slotIndex) => productionSlotHtml(slot, slotIndex)).join("")}
   `;
+  productionGrid.querySelector("#favoriteProductionButton")?.addEventListener("click", () => socket?.send(JSON.stringify({ type: "production_favorite_inputs" })));
   for (const select of productionGrid.querySelectorAll(".recipe-select")) {
     select.addEventListener("change", () => socket?.send(JSON.stringify({ type: "production_set_recipe", slot: Number(select.dataset.slot), recipeId: Number(select.value) })));
   }

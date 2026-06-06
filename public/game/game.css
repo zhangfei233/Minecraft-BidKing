@@ -364,6 +364,32 @@ a {
   color: var(--text);
 }
 
+.extra-reward-text {
+  margin: 8px 0 0;
+  color: #ffd65a;
+  font-size: 13px;
+  font-weight: 800;
+  text-shadow: 0 0 10px rgba(255, 214, 90, 0.45);
+  animation: rewardFlicker 1.8s ease-in-out infinite;
+}
+
+@keyframes rewardFlicker {
+  0%,
+  100% {
+    opacity: 0.78;
+    text-shadow: 0 0 8px rgba(255, 214, 90, 0.35);
+  }
+
+  45% {
+    opacity: 1;
+    text-shadow: 0 0 16px rgba(255, 214, 90, 0.72);
+  }
+
+  60% {
+    opacity: 0.86;
+  }
+}
+
 #winnerSellActions {
   display: flex;
   flex-wrap: wrap;

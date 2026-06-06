@@ -3,6 +3,7 @@ import path from "node:path";
 import { loadDefinitions } from "../game/definitions.js";
 import { validateSelections } from "../game/GameSession.js";
 import { loadItemsById } from "../items/items.js";
+import { drawLottery, loadLotteryRecipes, lotteryConsumableIds, normalizeLotteryState } from "../lottery/lottery.js";
 import {
   addMoney,
   addProfileItem,
@@ -12,6 +13,7 @@ import {
   removeProfileItem,
   saveProfileByNickname,
   sellProfileItems,
+  setFavorite,
   toggleFavorite,
 } from "../player/profile.js";
 import { acceptWebSocket, decodeWsText, sendWsJson } from "../net/websocket.js";
@@ -27,6 +29,7 @@ export function createRoom({ rootDir, onGameStart }) {
   const propDefinitions = loadDefinitions(rootDir, "props.csv");
   const itemsById = loadItemsById(rootDir);
   const productionRecipes = loadProductionRecipes(rootDir, itemsById);
+  const lotteryRecipes = loadLotteryRecipes(loadLotteryRaw(rootDir), itemsById, propDefinitions);
   const maxPlayers = loadMaxPlayers(rootDir);
   const containers = loadContainers(rootDir);
   let currentContainer = pickContainer(containers);
@@ -321,6 +324,45 @@ export function createRoom({ rootDir, onGameStart }) {
         broadcastRoomState();
         return;
       }
+      if (message.type === "production_favorite_inputs") {
+        for (const id of productionRequirementIds(productionRecipes)) setFavorite(player.profile, id, true);
+        saveProfileByNickname(rootDir, player.profile);
+        sendWarehouseState(player, socket);
+        return;
+      }
+      if (message.type === "warehouse_clear_notification") {
+        clearWarehouseNotification(player, message.kind);
+        saveProfileByNickname(rootDir, player.profile);
+        sendWarehouseState(player, socket);
+        return;
+      }
+      if (message.type === "lottery_refill") {
+        refillLottery(player);
+        saveProfileByNickname(rootDir, player.profile);
+        sendWarehouseState(player, socket);
+        return;
+      }
+      if (message.type === "lottery_draw") {
+        const result = performLottery(player);
+        saveProfileByNickname(rootDir, player.profile);
+        sendWsJson(socket, { type: "lottery_result", body: result });
+        sendWarehouseState(player, socket);
+        return;
+      }
+      if (message.type === "lottery_collect") {
+        const result = collectLotteryResults(player, message.mode);
+        saveProfileByNickname(rootDir, player.profile);
+        sendWsJson(socket, { type: "lottery_collect_result", body: result });
+        sendWarehouseState(player, socket);
+        broadcastRoomState();
+        return;
+      }
+      if (message.type === "lottery_favorite_consumes") {
+        for (const id of lotteryConsumableIds(lotteryRecipes)) setFavorite(player.profile, id, true);
+        saveProfileByNickname(rootDir, player.profile);
+        sendWarehouseState(player, socket);
+        return;
+      }
     } catch (error) {
       sendWsJson(socket, { type: "error", message: error.message });
     }
@@ -376,6 +418,12 @@ export function createRoom({ rootDir, onGameStart }) {
         propDefinitions: Object.fromEntries(propDefinitions),
         production: normalizeProductionState(player.profile.production),
         productionRecipes,
+        lottery: normalizeLotteryState(player.profile.lottery),
+        lotteryRecipes: publicLotteryRecipes(lotteryRecipes),
+        notifications: {
+          production: Boolean(player.profile.settings?.warehouseNotifications?.production),
+          lottery: Boolean(player.profile.settings?.warehouseNotifications?.lottery),
+        },
       },
     });
   }
@@ -392,48 +440,51 @@ export function createRoom({ rootDir, onGameStart }) {
 
   function setProductionRecipe(player, slotIndex, recipeId) {
     const slot = getProductionSlot(player, slotIndex);
-    if (slot.outputs.some(Boolean)) throw new Error("请先处理产出格中的物品");
-    for (const input of slot.inputs) if (input) addProfileItem(player.profile, input.id, input.count);
+    if (slot.outputs.some(Boolean)) throw new Error("\u8bf7\u5148\u5904\u7406\u4ea7\u7269\u683c\u4e2d\u7684\u7269\u54c1");
+    const returnedInputs = slot.inputs.filter(Boolean);
     if (!recipeId) {
       slot.recipeId = null;
       slot.inputs = [null, null, null, null];
+      for (const input of returnedInputs) addProfileItem(player.profile, input.id, input.count);
       return;
     }
     const recipe = productionRecipes.find((entry) => entry.recipe_id === recipeId);
-    if (!recipe) throw new Error("未知生产配方");
+    if (!recipe) throw new Error("\u672a\u77e5\u751f\u4ea7\u914d\u65b9");
     slot.recipeId = recipe.recipe_id;
     slot.inputs = [null, null, null, null];
+    for (const input of returnedInputs) addProfileItem(player.profile, input.id, input.count);
   }
 
   function placeProductionInput(player, slotIndex, inputIndex) {
     const slot = getProductionSlot(player, slotIndex);
     const recipe = productionRecipes.find((entry) => entry.recipe_id === slot.recipeId);
-    if (!recipe) throw new Error("请先选择配方");
-    if (!Number.isInteger(inputIndex) || inputIndex < 0 || inputIndex >= 4) throw new Error("生产格无效");
+    if (!recipe) throw new Error("\u8bf7\u5148\u9009\u62e9\u914d\u65b9");
+    if (!Number.isInteger(inputIndex) || inputIndex < 0 || inputIndex >= 4) throw new Error("\u751f\u4ea7\u683c\u65e0\u6548");
     const itemId = recipe.recipe[inputIndex];
-    if (!itemId) throw new Error("该配方不需要这个格子");
-    if (slot.inputs[inputIndex]) throw new Error("该生产格已经放入物品");
-    removeProfileItem(player.profile, itemId, 1);
+    if (!itemId) throw new Error("\u8be5\u914d\u65b9\u4e0d\u9700\u8981\u8fd9\u4e2a\u683c\u5b50");
+    if (slot.inputs[inputIndex]) throw new Error("\u8be5\u751f\u4ea7\u683c\u5df2\u7ecf\u653e\u5165\u7269\u54c1");
+    takeProfileItemWithoutNormalizing(player.profile, itemId, 1);
     slot.inputs[inputIndex] = { id: itemId, count: 1 };
   }
 
   function removeProductionInput(player, slotIndex, inputIndex) {
     const slot = getProductionSlot(player, slotIndex);
-    if (!Number.isInteger(inputIndex) || inputIndex < 0 || inputIndex >= 4) throw new Error("生产格无效");
+    if (!Number.isInteger(inputIndex) || inputIndex < 0 || inputIndex >= 4) throw new Error("\u751f\u4ea7\u683c\u65e0\u6548");
     const input = slot.inputs[inputIndex];
     if (!input) return;
-    addProfileItem(player.profile, input.id, input.count);
     slot.inputs[inputIndex] = null;
+    addProfileItem(player.profile, input.id, input.count);
   }
 
   function collectProductionOutput(player, slotIndex, outputIndex, mode = "take") {
     const slot = getProductionSlot(player, slotIndex);
-    if (!Number.isInteger(outputIndex) || outputIndex < 0 || outputIndex >= 2) throw new Error("产物格无效");
+    if (!Number.isInteger(outputIndex) || outputIndex < 0 || outputIndex >= 2) throw new Error("\u4ea7\u7269\u683c\u65e0\u6548");
     const output = slot.outputs[outputIndex];
-    if (!output || output.count <= 0) throw new Error("该产物格为空");
+    if (!output || output.count <= 0) throw new Error("\u8be5\u4ea7\u7269\u683c\u4e3a\u7a7a");
     const item = itemsById.get(output.id);
-    if (!item) throw new Error("未知产物");
+    if (!item) throw new Error("\u672a\u77e5\u4ea7\u7269");
     const result = { mode, itemId: output.id, count: output.count, itemName: item.name, total: 0, money: player.profile.money };
+    slot.outputs[outputIndex] = null;
     if (mode === "sell") {
       result.total = output.count * Number(item.price || 0);
       addMoney(player.profile, result.total);
@@ -441,8 +492,63 @@ export function createRoom({ rootDir, onGameStart }) {
     } else {
       addProfileItem(player.profile, output.id, output.count);
     }
-    slot.outputs[outputIndex] = null;
     return result;
+  }
+
+  function refillLottery(player) {
+    player.profile.lottery = normalizeLotteryState(player.profile.lottery);
+    if (player.profile.lottery.results.length) throw new Error("请先处理抽奖结果");
+    if (player.profile.lottery.slot) return;
+    const ids = lotteryConsumableIds(lotteryRecipes);
+    const id = ids.find((itemId) => (player.profile.warehouse.items[String(itemId)]?.count || 0) > 0);
+    if (!id) throw new Error("没有可补充的抽奖道具");
+    removeProfileItem(player.profile, id, 1);
+    player.profile.lottery.slot = { id, count: 1 };
+  }
+
+  function performLottery(player) {
+    player.profile.lottery = normalizeLotteryState(player.profile.lottery);
+    if (player.profile.lottery.results.length) throw new Error("请先领取或出售当前抽奖结果");
+    const slot = player.profile.lottery.slot;
+    if (!slot) throw new Error("请先放入抽奖道具");
+    const recipe = lotteryRecipes.find((entry) => entry.consume === slot.id);
+    if (!recipe) throw new Error("该物品不是抽奖道具");
+    const results = drawLottery(recipe, Math.random);
+    player.profile.lottery.slot = null;
+    player.profile.lottery.results = mergeLotteryResults(results);
+    return { results: player.profile.lottery.results };
+  }
+
+  function collectLotteryResults(player, mode = "take") {
+    player.profile.lottery = normalizeLotteryState(player.profile.lottery);
+    const results = player.profile.lottery.results || [];
+    if (!results.length) throw new Error("没有可领取的抽奖结果");
+    let total = 0;
+    const collected = [];
+    for (const result of results) {
+      if (mode === "sell" || (mode === "sell_unfavorite" && (result.class === "prop" || !player.profile.warehouse.items[String(result.id)]?.collected))) {
+        total += lotteryResultValue(result);
+      } else {
+        addLotteryResultToProfile(player.profile, result);
+        collected.push(result);
+      }
+    }
+    if (total > 0) addMoney(player.profile, total);
+    player.profile.lottery.results = [];
+    return { mode, total, collected, money: player.profile.money };
+  }
+
+  function addLotteryResultToProfile(profile, result) {
+    if (result.class === "prop") {
+      profile.warehouse.props[result.id] = (profile.warehouse.props[result.id] || 0) + result.count;
+    } else {
+      addProfileItem(profile, result.id, result.count);
+    }
+  }
+
+  function lotteryResultValue(result) {
+    if (result.class === "prop") return Number(propDefinitions.get(String(result.id))?.price || 0) * result.count;
+    return Number(itemsById.get(Number(result.id))?.price || 0) * result.count;
   }
 
   function getProductionSlot(player, slotIndex) {
@@ -611,6 +717,53 @@ function loadMaxPlayers(rootDir) {
   } catch {
     return MAX_PLAYERS;
   }
+}
+
+function loadLotteryRaw(rootDir) {
+  const filePath = path.join(rootDir, "lottery.json");
+  if (!fs.existsSync(filePath)) return [];
+  return JSON.parse(fs.readFileSync(filePath, "utf8"));
+}
+
+function publicLotteryRecipes(recipes) {
+  return recipes.map((recipe) => ({
+    recipe_id: recipe.recipe_id,
+    consume: recipe.consume,
+    outcome: recipe.outcome,
+    pool: recipe.poolText,
+  }));
+}
+
+function mergeLotteryResults(results) {
+  const merged = [];
+  for (const result of results) {
+    const existing = merged.find((entry) => entry.class === result.class && String(entry.id) === String(result.id));
+    if (existing) existing.count += result.count;
+    else merged.push({ ...result });
+  }
+  return merged;
+}
+
+function productionRequirementIds(recipes) {
+  return [...new Set(recipes.flatMap((recipe) => recipe.recipe || []).map(Number).filter(Boolean))];
+}
+
+function takeProfileItemWithoutNormalizing(profile, itemId, count = 1) {
+  const id = Number(itemId);
+  const amount = Math.max(1, Math.floor(Number(count) || 1));
+  const key = String(id);
+  const entry = profile.warehouse?.items?.[key];
+  if (!entry || entry.count < amount) throw new Error(`物品数量不足: ${id}`);
+  entry.count -= amount;
+  if (entry.count <= 0) delete profile.warehouse.items[key];
+}
+
+function clearWarehouseNotification(player, kind) {
+  if (!player.profile.settings || typeof player.profile.settings !== "object") player.profile.settings = {};
+  if (!player.profile.settings.warehouseNotifications || typeof player.profile.settings.warehouseNotifications !== "object") {
+    player.profile.settings.warehouseNotifications = {};
+  }
+  if (kind === "production" || kind === "lottery") player.profile.settings.warehouseNotifications[kind] = false;
 }
 
 function loadContainers(rootDir) {

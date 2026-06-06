@@ -62,7 +62,7 @@ async function loadData() {
   });
   const normalProps = parseCsv(propsText).map((prop) => {
     const level = Number(prop.level || 1);
-    const rarity = rarityOrder[Math.max(0, Math.min(5, level - 1))] || "gray";
+    const rarity = prop.rarity || rarityOrder[Math.max(0, Math.min(5, level - 1))] || "gray";
     return { ...prop, id: prop.id, level, rarity, typeLabel: `\u9053\u5177 Lv.${level}`, width: 1, height: 1, price: Number(prop.price || 0), image: prop.image };
   });
   const specialProps = specialPropsText.trim()

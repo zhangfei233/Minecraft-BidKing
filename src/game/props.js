@@ -122,14 +122,50 @@ class RevealHighestUnknownValueProp extends Prop {
   }
 }
 
+class RevealRarityOutlineProp extends Prop {
+  constructor(definition, level, rarity, count = null) {
+    super(definition, level);
+    this.rarity = rarity;
+    this.count = count;
+  }
+
+  use({ warehouse, viewNumber, view, random }) {
+    const indexes = pickRarityIndexesDescending(warehouse, view, this.rarity, this.count, random);
+    const message = indexes.map((itemIndex) => warehouse.addHint(viewNumber, { type: "item_outline_rarity", itemIndex }));
+    return this.package(this.description || "\u663e\u793a\u6307\u5b9a\u54c1\u8d28\u6218\u5229\u54c1\u7684\u8f6e\u5ed3", message);
+  }
+}
+
+class RevealAllOutlineRarityProp extends Prop {
+  use({ warehouse, viewNumber, view }) {
+    const indexes = warehouse.items
+      .map((item, index) => ({ item, index }))
+      .filter(({ item, index }) => index > 0 && !itemFullyKnown(view, item))
+      .map(({ index }) => index);
+    const message = indexes.map((itemIndex) => warehouse.addHint(viewNumber, { type: "item_outline_rarity", itemIndex }));
+    return this.package(this.description || "\u663e\u793a\u5168\u90e8\u6218\u5229\u54c1\u7684\u54c1\u8d28\u548c\u8f6e\u5ed3", message);
+  }
+}
+
+class RevealAllFullProp extends Prop {
+  use({ warehouse, viewNumber, view }) {
+    const indexes = warehouse.items
+      .map((item, index) => ({ item, index }))
+      .filter(({ item, index }) => index > 0 && !itemFullInfoKnown(view, item))
+      .map(({ index }) => index);
+    const message = indexes.map((itemIndex) => warehouse.addHint(viewNumber, { type: "item_full", itemIndex }));
+    return this.package(this.description || "\u663e\u793a\u5168\u90e8\u7269\u54c1", message);
+  }
+}
+
 export function createProp(id, definition = {}, level = 1) {
   const map = {
     prop_1: () => new RevealOneItemProp(definition, level),
     prop_2: () => new RevealRarityProp(definition, level, 4),
-    prop_3: () => new RevealOutlineProp(definition, level, 3),
-    prop_4: () => new RevealOutlineProp(definition, level, 4),
-    prop_5: () => new RevealOutlineProp(definition, level, 5),
-    prop_6: () => new RevealOutlineProp(definition, level, 6),
+    prop_3: () => new RevealOutlineProp(definition, level, 5),
+    prop_4: () => new RevealOutlineProp(definition, level, 7),
+    prop_5: () => new RevealOutlineProp(definition, level, 9),
+    prop_6: () => new RevealOutlineProp(definition, level, 11),
     prop_7: () => new RevealTypeOutlineRarityProp(definition, level, ["natural"], 2),
     prop_8: () => new RevealTypeOutlineRarityProp(definition, level, ["ore"], 2),
     prop_9: () => new RevealTypeOutlineRarityProp(definition, level, ["tech"], 2),
@@ -141,6 +177,48 @@ export function createProp(id, definition = {}, level = 1) {
     prop_15: () => new RevealRarityProp(definition, level, 7),
     prop_16: () => new RevealHighestUnknownValueProp(definition, level),
     prop_17: () => new RevealOutlineProp(definition, level, 1),
+    prop_18: () => new RevealRarityOutlineProp(definition, level, "gray", 5),
+    prop_19: () => new RevealRarityOutlineProp(definition, level, "gray"),
+    prop_20: () => new RevealRarityOutlineProp(definition, level, "green", 5),
+    prop_21: () => new RevealRarityOutlineProp(definition, level, "green"),
+    prop_22: () => new RevealRarityOutlineProp(definition, level, "blue", 4),
+    prop_23: () => new RevealRarityOutlineProp(definition, level, "blue"),
+    prop_24: () => new RevealRarityOutlineProp(definition, level, "purple", 4),
+    prop_25: () => new RevealRarityOutlineProp(definition, level, "purple"),
+    prop_26: () => new RevealRarityOutlineProp(definition, level, "gold", 2),
+    prop_27: () => new RevealRarityOutlineProp(definition, level, "gold"),
+    prop_28: () => new RevealRarityOutlineProp(definition, level, "red", 1),
+    prop_29: () => new RevealRarityOutlineProp(definition, level, "red"),
+    prop_30: () => new RevealAllOutlineRarityProp(definition, level),
+    prop_31: () => new RevealAllFullProp(definition, level),
   };
   return (map[id] || map.prop_1)();
+}
+
+const RARITY_LOW_TO_HIGH = ["gray", "green", "blue", "purple", "gold", "red"];
+
+function pickRarityIndexesDescending(warehouse, view, startRarity, count, random) {
+  const result = [];
+  const startIndex = Math.max(0, RARITY_LOW_TO_HIGH.indexOf(startRarity));
+  for (let rarityIndex = startIndex; rarityIndex >= 0; rarityIndex -= 1) {
+    const candidates = warehouse.items
+      .map((item, index) => ({ item, index }))
+      .filter(({ item, index }) => index > 0 && item.rarity === RARITY_LOW_TO_HIGH[rarityIndex] && !itemFullyKnown(view, item))
+      .map(({ index }) => index)
+      .filter((index) => !result.includes(index));
+    const picked = count == null ? candidates : sample(candidates, Math.max(0, count - result.length), random);
+    result.push(...picked);
+    if (count != null && result.length >= count) break;
+    if (count == null && result.length > 0) break;
+  }
+  return count == null ? result : result.slice(0, count);
+}
+
+function sample(items, count, random) {
+  const result = [...items];
+  for (let i = result.length - 1; i > 0; i -= 1) {
+    const j = Math.floor(random() * (i + 1));
+    [result[i], result[j]] = [result[j], result[i]];
+  }
+  return result.slice(0, count);
 }

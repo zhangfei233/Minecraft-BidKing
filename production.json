@@ -7,5 +7,83 @@
       "249": 0.5,
       "24": 0.8
     }
+  },
+  {
+    "recipe_id": 2,
+    "type": 1,
+    "recipe": [1178],
+    "product": {
+      "249": 1.0,
+      "24": 1.0
+    }
+  },
+  {
+    "recipe_id": 3,
+    "type": 1,
+    "recipe": [671],
+    "product": {
+      "25": 1.0
+    }
+  },
+  {
+    "recipe_id": 4,
+    "type": 1,
+    "recipe": [681],
+    "product": {
+      "25": 0.6
+    }
+  },
+  {
+    "recipe_id": 5,
+    "type": 1,
+    "recipe": [799],
+    "product": {
+      "759": 0.1,
+      "712": 0.12
+    }
+  },
+  {
+    "recipe_id": 6,
+    "type": 1,
+    "recipe": [800],
+    "product": {
+      "254": 0.8,
+      "761": 0.1
+    }
+  },
+  {
+    "recipe_id": 7,
+    "type": 1,
+    "recipe": [791],
+    "product": {
+      "307": 1.0
+    }
+  },
+  {
+    "recipe_id": 8,
+    "type": 1,
+    "recipe": [2683],
+    "product": {
+      "2721": 0.5,
+      "2722": 0.2
+    }
+  },
+  {
+    "recipe_id": 9,
+    "type": 1,
+    "recipe": [1532],
+    "product": {
+      "5": 1.0,
+      "4": 0.7
+    }
+  },
+  {
+    "recipe_id": 10,
+    "type": 1,
+    "recipe": [738],
+    "product": {
+      "31": 0.5,
+      "75": 1.0
+    }
   }
 ]
