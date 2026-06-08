@@ -1,4 +1,4 @@
-import fs from "node:fs";
+﻿import fs from "node:fs";
 import path from "node:path";
 import { Warehouse } from "./Warehouse.js";
 import { createCharacter } from "./characters.js";
@@ -8,23 +8,24 @@ import {
   addMoney,
   addProfileItem,
   addWarehouseItemsToProfile,
-  deductMoney,
+  deductMoneyAllowDebt,
   saveProfileByNickname,
   sellProfileItemCounts,
 } from "../player/profile.js";
 import { loadConfig, loadItemsById } from "../items/items.js";
 import { decodeWsText, sendWsJson } from "../net/websocket.js";
 import { itemFullInfoKnown, splitTypes } from "./hints.js";
-import { error as logError } from "../net/logger.js";
+import { error as logError, info as logInfo } from "../net/logger.js";
 import { loadProductionRecipes, runProduction } from "../production/production.js";
 import { loadLotteryRecipes, lotteryConsumableIds } from "../lottery/lottery.js";
+import { AdvantageTracker, requiredPairRatio } from "./advantage.js";
 
 const ROUND_COUNT = 5;
 const ROUND_MS = 62_000;
-const CLIENT_COUNTDOWN_SECONDS = 60;
 const INTERMISSION_MS = 3_000;
 const WIN_RATIOS = [2, 1.6, 1.3, 1.1, 1];
 const HEARTBEAT_TIMEOUT_MS = 45_000;
+const GAME_RECONNECT_GRACE_MS = 60_000;
 const RARITIES = ["gray", "green", "blue", "purple", "gold", "red"];
 const RARITY_LABELS = { gray: "\u767d", green: "\u7eff", blue: "\u84dd", purple: "\u7d2b", gold: "\u91d1", red: "\u7ea2" };
 const SYSTEM_HINT_TITLE = "\u516c\u5f00\u7684\u6218\u5229\u54c1\u4fe1\u606f";
@@ -83,9 +84,14 @@ export class GameSession {
     this.round = 0;
     this.roundTimer = null;
     this.intermissionTimer = null;
+    this.pauseTimer = null;
+    this.roundEndsAt = null;
+    this.roundPaused = false;
     this.started = false;
     this.finished = false;
+    this.advantages = new AdvantageTracker();
     this.reserveCarriedProps();
+    this.initializeNewCharacterStates();
     this.heartbeatTimer = setInterval(() => this.checkHeartbeats(), 15_000);
     this.heartbeatTimer.unref?.();
   }
@@ -108,17 +114,13 @@ export class GameSession {
       socket.end();
       return;
     }
-    if (player.disconnected) {
-      sendWsJson(socket, { type: "error", message: "本局游戏已判定掉线，不能重连" });
-      socket.end();
-      return;
-    }
 
     clearTimeout(player.disconnectTimer);
     player.disconnectTimer = null;
     const previousSocket = player.gameSocket;
     player.gameSocket = socket;
     player.connected = true;
+    player.disconnected = false;
     player.lastSeen = Date.now();
     socket.on("data", (buffer) => this.handleMessage(player, buffer));
     socket.on("close", () => this.scheduleDisconnect(player, socket));
@@ -136,7 +138,7 @@ export class GameSession {
     player.gameSocket = null;
     player.lastSeen = Date.now();
     clearTimeout(player.disconnectTimer);
-    player.disconnectTimer = setTimeout(() => this.markDisconnected(player), 20_000);
+    player.disconnectTimer = setTimeout(() => this.markDisconnected(player), GAME_RECONNECT_GRACE_MS);
     player.disconnectTimer.unref?.();
   }
 
@@ -165,7 +167,7 @@ export class GameSession {
     if (this.finished) return;
     const now = Date.now();
     for (const player of this.players) {
-      if (player.connected && now - player.lastSeen > HEARTBEAT_TIMEOUT_MS) this.markDisconnected(player);
+      if (player.connected && now - player.lastSeen > HEARTBEAT_TIMEOUT_MS) this.scheduleDisconnect(player, player.gameSocket);
     }
   }
 
@@ -174,6 +176,26 @@ export class GameSession {
     this.started = true;
     this.emitSystemPublicHint({ force: true });
     this.startRound(1);
+  }
+
+  initializeNewCharacterStates() {
+    const realItemIndexes = this.warehouse.items
+      .map((item, index) => (index > 0 && item.id !== 0 ? index : 0))
+      .filter(Boolean);
+    for (const player of this.players) {
+      if (player.characterId === "character_20" && realItemIndexes.length) {
+        player.characterState.pucciTargetIndex = realItemIndexes[Math.floor(this.random() * realItemIndexes.length)];
+        player.characterState.madeInHeaven = false;
+      }
+      if (player.characterId === "character_21") {
+        player.characterState.megumiMode = null;
+        player.characterState.megumiPredictions = {};
+      }
+      if (player.characterId === "character_19") {
+        player.characterState.omenTotalByPlayer = {};
+        player.characterState.omenActive = {};
+      }
+    }
   }
 
   createOpeningPublicHint() {
@@ -202,12 +224,15 @@ export class GameSession {
     if (this.finished) return;
     this.round = round;
     this.roundStartedAt = Date.now();
+    const roundMs = this.roundDurationMsFor(round);
+    this.roundEndsAt = Date.now() + roundMs;
+    this.roundPaused = false;
     for (const player of this.players) {
       player.propUsesThisRound = 0;
       player.submitted[round - 1] = Boolean(player.disconnected);
       player.bids[round - 1] = player.disconnected ? 0 : null;
       this.applyRoundStartCharacterProps(player, round);
-      this.send(player, { type: "round_start", body: { round, countdownSeconds: CLIENT_COUNTDOWN_SECONDS } });
+      this.send(player, { type: "round_start", body: { round, countdownSeconds: this.clientCountdownSecondsFor(roundMs) } });
     }
     this.broadcastPublicState({ clearBidState: true });
     if (round > 1) this.emitSystemPublicHint({ force: false });
@@ -219,9 +244,57 @@ export class GameSession {
         this.emitCharacterRoundHint(player);
       }
     }
+    this.sendRoundStartChoiceRequests(round);
+    this.scheduleRoundTimer();
+  }
+
+  roundDurationMsFor() {
+    const madeInHeavenCount = this.players.filter((player) => player.characterState.madeInHeaven).length;
+    return Math.max(5_000, Math.ceil(ROUND_MS * 0.5 ** madeInHeavenCount));
+  }
+
+  clientCountdownSecondsFor(ms) {
+    return Math.max(0, Math.ceil(ms / 1000) - 2);
+  }
+
+  scheduleRoundTimer() {
     clearTimeout(this.roundTimer);
-    this.roundTimer = setTimeout(() => this.endRound(), ROUND_MS);
+    if (this.finished || this.roundPaused || !this.roundEndsAt) return;
+    const ms = Math.max(0, this.roundEndsAt - Date.now());
+    this.roundTimer = setTimeout(() => this.endRound(), ms);
     this.roundTimer.unref?.();
+  }
+
+  setRoundRemainingMs(ms) {
+    if (this.finished || !this.round) return;
+    const clamped = Math.max(0, Math.floor(Number(ms) || 0));
+    this.roundEndsAt = Date.now() + clamped;
+    this.scheduleRoundTimer();
+    this.broadcast({ type: "set_round_timer", body: { countdownSeconds: this.clientCountdownSecondsFor(clamped) } });
+  }
+
+  pauseRoundTime({ seconds, animations = [] } = {}) {
+    if (this.finished || !this.roundEndsAt) return;
+    const ms = Math.max(0, Math.floor(Number(seconds || 0) * 1000));
+    if (!ms) return;
+    clearTimeout(this.roundTimer);
+    clearTimeout(this.pauseTimer);
+    this.roundPaused = true;
+    this.roundEndsAt += ms;
+    this.broadcast({
+      type: "round_pause",
+      body: {
+        pauseSeconds: Math.ceil(ms / 1000),
+        countdownSeconds: this.currentCountdownSeconds(),
+        animations,
+      },
+    });
+    this.pauseTimer = setTimeout(() => {
+      this.roundPaused = false;
+      this.scheduleRoundTimer();
+      this.broadcast({ type: "set_round_timer", body: { countdownSeconds: this.currentCountdownSeconds() } });
+    }, ms);
+    this.pauseTimer.unref?.();
   }
 
   emitSystemPublicHint({ force = false } = {}) {
@@ -343,6 +416,8 @@ export class GameSession {
         winnerId: result.winnerId,
         finished: result.finished,
         passed: !result.finished,
+        pauseSeconds: Math.ceil(INTERMISSION_MS / 1000),
+        animations: [],
       },
     });
 
@@ -368,7 +443,7 @@ export class GameSession {
     try {
       message = JSON.parse(text);
     } catch {
-      this.send(player, { type: "error", message: "消息格式错误" });
+      this.send(player, { type: "error", message: "角色技能执行失败" });
       return;
     }
     if (message.type === "heartbeat") return;
@@ -399,16 +474,22 @@ export class GameSession {
       return;
     }
 
+    if (message.type === "megumi_choice") {
+      this.receiveMegumiChoice(player, message.choice);
+      return;
+    }
+
+    if (message.type === "megumi_prediction") {
+      this.receiveMegumiPrediction(player, message.predictions);
+      return;
+    }
+
   }
 
   receiveBid(player, amount) {
     const roundIndex = this.round - 1;
     if (roundIndex < 0 || roundIndex >= ROUND_COUNT || player.submitted[roundIndex]) return;
     const bid = Math.max(0, Math.floor(Number(amount) || 0));
-    if (bid > player.profile.money) {
-      this.send(player, { type: "error", message: "出价不能超过当前金钱" });
-      return;
-    }
     player.bids[roundIndex] = bid;
     player.submitted[roundIndex] = true;
     this.broadcast({ type: "bid_submitted", body: { playerId: player.id, round: this.round } });
@@ -419,20 +500,20 @@ export class GameSession {
   useProp(player, slot, target = null) {
     const roundIndex = this.round - 1;
     if (!Number.isInteger(slot) || slot < 0 || slot >= 5) {
-      this.send(player, { type: "error", message: "\u9053\u5177\u69fd\u65e0\u6548" });
+      this.send(player, { type: "error", message: "角色技能执行失败" });
       return;
     }
     if (player.propUsesThisRound >= maxPropUsesFor(player)) {
-      this.send(player, { type: "error", message: "\u672c\u56de\u5408\u5df2\u7ecf\u8fbe\u5230\u9053\u5177\u4f7f\u7528\u6b21\u6570\u4e0a\u9650" });
+      this.send(player, { type: "error", message: "角色技能执行失败" });
       return;
     }
     if (player.submitted[roundIndex]) {
-      this.send(player, { type: "error", message: "\u51fa\u4ef7\u540e\u4e0d\u80fd\u4f7f\u7528\u9053\u5177" });
+      this.send(player, { type: "error", message: "角色技能执行失败" });
       return;
     }
     const selected = player.props[slot];
     if (!selected) {
-      this.send(player, { type: "error", message: "\u8be5\u69fd\u4f4d\u6ca1\u6709\u643a\u5e26\u9053\u5177" });
+      this.send(player, { type: "error", message: "角色技能执行失败" });
       return;
     }
 
@@ -461,6 +542,7 @@ export class GameSession {
   useSpecialProp(player, selected, target) {
     if (selected.id === "sp_prop1") return this.useTntProp(player, target);
     if (selected.id === "sp_prop2") return this.useCopyProp(player, target);
+    if (selected.id === "sp_prop3") return this.useMoonProp(player, target);
     return { type: "hint", title: `\u9053\u5177\u3010${selected.id}\u3011`, text: "\u8be5\u4e13\u5c5e\u9053\u5177\u5c1a\u672a\u5b9e\u73b0", show: false, message: [] };
   }
 
@@ -477,12 +559,22 @@ export class GameSession {
         this.send(player, characterTextHint("\u5947\u6570\u56de\u5408\u5f00\u59cb\uff0c\u4f46\u6ca1\u6709\u53ef\u66ff\u6362\u7684\u666e\u901a\u9053\u5177\u3002", this.characterDefinitions.get(player.characterId)?.image));
       }
     }
+    if (player.characterId === "character_20" && !player.characterState.madeInHeaven && !player.props.some((prop) => prop?.id === "sp_prop3")) {
+      const slot = firstEmptyPropSlot(player);
+      if (slot >= 0) {
+        player.props[slot] = makeTemporaryProp("sp_prop3", this.allPropDefinitions.get("sp_prop3"), { exclusive: true });
+        this.send(player, characterTextHint("获得临时专属道具【新月】。", this.characterDefinitions.get(player.characterId)?.image));
+        this.send(player, { type: "prop_slots", body: { props: player.props, uses: player.propUsesThisRound || 0, maxUses: maxPropUsesFor(player) } });
+      }
+    }
   }
 
   applyRoundEndCharacterProps(roundIndex) {
     for (const player of this.players) {
       if (player.characterId === "character_17") this.applyCreeperRoundEnd(player, roundIndex);
       if (player.characterId === "character_16") this.applyLuxunRoundEnd(player, roundIndex);
+      if (player.characterId === "character_19") this.applyRaidCapRoundEnd(player, roundIndex);
+      if (player.characterId === "character_21") this.applyMegumiRoundEnd(player, roundIndex);
     }
   }
 
@@ -524,6 +616,107 @@ export class GameSession {
     }
     if (granted > 0) this.send(player, characterTextHint(`\u8fde\u7eed\u51fa\u4ef7\u76f8\u540c\uff0c\u83b7\u5f97 ${granted} \u4ef6\u4e34\u65f6\u9053\u5177\u3002`, this.characterDefinitions.get(player.characterId)?.image));
     this.send(player, { type: "prop_slots", body: { props: player.props, uses: player.propUsesThisRound || 0, maxUses: maxPropUsesFor(player) } });
+  }
+
+  applyRaidCapRoundEnd(player, roundIndex) {
+    player.characterState.omenActive = {};
+    const ownBid = player.bids[roundIndex] || 0;
+    const allBids = this.players.map((entry) => entry.bids[roundIndex] || 0);
+    if (ownBid <= Math.min(...allBids)) return;
+    for (const target of this.players) {
+      if (target.id === player.id) continue;
+      if ((target.bids[roundIndex] || 0) <= ownBid) continue;
+      const state = player.characterState;
+      state.omenTotalByPlayer[target.id] = (state.omenTotalByPlayer[target.id] || 0) + 1;
+      state.omenActive[target.id] = state.omenTotalByPlayer[target.id];
+      this.send(target, characterTextHint(`受到 RaidCap 的不详之兆影响，下回合竞价出价视为减少 ${state.omenActive[target.id] * 5}%。`, this.characterDefinitions.get(player.characterId)?.image));
+    }
+  }
+
+  sendRoundStartChoiceRequests(round) {
+    for (const player of this.players) {
+      if (player.characterId !== "character_21" || player.disconnected) continue;
+      if (round === 2 && !player.characterState.megumiMode) {
+        this.send(player, {
+          type: "megumi_choice_request",
+          body: { round, text: "请选择本局技能路线。", canChooseDomain: this.players.length >= 3 },
+        });
+      } else if (round >= 2 && player.characterState.megumiMode === "makora") {
+        this.sendMegumiPredictionAvailable(player);
+      }
+    }
+  }
+
+  receiveMegumiChoice(player, choice) {
+    if (player.characterId !== "character_21" || this.round < 2 || player.characterState.megumiMode) return;
+    const normalized = choice === "makora" ? "makora" : "domain";
+    if (normalized === "domain" && this.players.length < 3) {
+      this.send(player, { type: "error", message: "本局玩家少于3人，不能选择领域展开" });
+      return;
+    }
+    player.characterState.megumiMode = normalized;
+    const text = normalized === "domain"
+      ? `Megumi玩家${player.nickname}选择了领域展开：嵌合暗翳庭`
+      : `Megumi玩家${player.nickname}选择了跟你爆了：召唤魔虚罗Makora`;
+    this.broadcastCharacterText(player, text);
+    this.broadcastPublicState({ clearBidState: false });
+    if (normalized === "makora") this.sendMegumiPredictionAvailable(player);
+  }
+
+  sendMegumiPredictionAvailable(player) {
+    const previousRoundIndex = Math.max(0, this.round - 2);
+    const targets = this.players
+      .filter((entry) => entry.id !== player.id)
+      .map((entry) => ({ id: entry.id, nickname: entry.nickname, lastBid: entry.bids[previousRoundIndex] || 0 }));
+    if (!player.characterState.megumiPredictions[this.round]) {
+      player.characterState.megumiPredictions[this.round] = Object.fromEntries(targets.map((target) => [target.id, "equal"]));
+    }
+    this.send(player, { type: "megumi_prediction_available", body: { round: this.round, players: targets } });
+  }
+
+  receiveMegumiPrediction(player, predictions) {
+    if (player.characterId !== "character_21" || player.characterState.megumiMode !== "makora") return;
+    if (player.submitted?.[this.round - 1]) return;
+    const normalized = {};
+    for (const target of this.players) {
+      if (target.id === player.id) continue;
+      const value = predictions?.[target.id];
+      normalized[target.id] = value === "up" || value === "down" ? value : "equal";
+    }
+    player.characterState.megumiPredictions[this.round] = normalized;
+    this.send(player, characterTextHint("本回合预测已提交。", this.characterDefinitions.get(player.characterId)?.image));
+  }
+
+  applyMegumiRoundEnd(player, roundIndex) {
+    if (roundIndex < 1) return;
+    if (!player.characterState.megumiMode) {
+      player.characterState.megumiMode = "blank";
+      this.broadcastCharacterText(player, `Megumi玩家${player.nickname}选择了摆烂：已经。。。无所谓了。`);
+      return;
+    }
+    if (player.characterState.megumiMode !== "makora") return;
+    const previousRoundIndex = Math.max(0, roundIndex - 1);
+    const predictions = player.characterState.megumiPredictions[this.round] || {};
+    const correctTargets = [];
+    for (const target of this.players) {
+      if (target.id === player.id) continue;
+      const previous = target.bids[previousRoundIndex] || 0;
+      const current = target.bids[roundIndex] || 0;
+      const actual = current > previous ? "up" : current < previous ? "down" : "equal";
+      if ((predictions[target.id] || "equal") !== actual) continue;
+      this.advantages.add(player.id, target.id, 0.05);
+      correctTargets.push(target);
+      this.send(target, characterTextHint(`Makora玩家${player.nickname}对你进一步适应了。`, "/resource/characters/Makora.png"));
+    }
+    if (correctTargets.length) {
+      this.send(player, characterTextHint(`对${correctTargets.map((target) => target.nickname).join("，")}玩家积累了5%的优势。`, "/resource/characters/Makora.png"));
+    }
+  }
+
+  broadcastCharacterText(player, text) {
+    for (const target of this.players) {
+      this.send(target, characterTextHint(text, this.characterDefinitions.get(player.characterId)?.image));
+    }
   }
 
   tryGrantPendingExclusive(player) {
@@ -570,12 +763,66 @@ export class GameSession {
     player.copiedItems.push({ itemId: item.id, itemIndex, item: { ...item }, nickname: player.nickname, playerId: player.id });
     return { type: "hint", title: "\u9053\u5177\u3010\u590d\u5236\u673a\u3011", text: "\u590d\u5236\u6210\u529f\uff0c\u5c06\u4e8e\u7ed3\u7b97\u9636\u6bb5\u63ed\u793a", show: false, message: [] };
   }
+
+  useMoonProp(player, target) {
+    const itemIndex = this.warehouse.getIndexAt(target.x, target.y);
+    if (!itemIndex) {
+      const neighborIndexes = new Set();
+      for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+        const nx = Number(target.x) + dx;
+        const ny = Number(target.y) + dy;
+        if (nx < 0 || nx >= this.warehouse.width || ny < 0 || ny >= this.warehouse.maxRows) continue;
+        const neighborIndex = this.warehouse.getIndexAt(nx, ny);
+        if (neighborIndex > 0) neighborIndexes.add(neighborIndex);
+      }
+      const message = [...neighborIndexes].map((neighborIndex) => this.warehouse.addHint(player.gameIndex, { type: "item_outline", itemIndex: neighborIndex }));
+      return { type: "hint", title: "道具【新月】", text: "选定位置没有战利品，已尝试显示相邻战利品轮廓。", show: message.length > 0, message };
+    }
+
+    const selectedItem = this.warehouse.getItemByIndex(itemIndex);
+    const rawHints = [{ type: "item_full", itemIndex }];
+    for (const neighborIndex of this.neighborItemIndexes(itemIndex)) rawHints.push({ type: "item_outline", itemIndex: neighborIndex });
+    const message = rawHints.map((hint) => this.warehouse.addHint(player.gameIndex, hint));
+
+    let text = `显示了【${selectedItem.name}】以及相邻战利品的轮廓。`;
+    if (player.characterId === "character_20" && !player.characterState.madeInHeaven) {
+      if (Number(player.characterState.pucciTargetIndex) === Number(itemIndex)) {
+        player.characterState.madeInHeaven = true;
+        text += " 目标定位成功，【天堂制造】开始。";
+        this.applyMadeInHeavenTimingShift();
+      } else {
+        text += " 选定位置错误。";
+      }
+    }
+
+    return { type: "hint", title: "道具【新月】", text, show: message.length > 0, message };
+  }
+
+  neighborItemIndexes(itemIndex) {
+    const source = this.warehouse.getItemByIndex(itemIndex);
+    if (!source) return [];
+    const result = [];
+    for (let index = 1; index < this.warehouse.items.length; index += 1) {
+      if (index === itemIndex) continue;
+      const item = this.warehouse.getItemByIndex(index);
+      if (itemsShareEdge(source, item)) result.push(index);
+    }
+    return result;
+  }
+
+  applyMadeInHeavenTimingShift() {
+    if (!this.roundEndsAt || this.finished) return;
+    const remaining = Math.max(0, this.roundEndsAt - Date.now());
+    this.setRoundRemainingMs(Math.ceil(remaining * 0.5));
+  }
+
   finishGame(winnerId) {
     this.finished = true;
     this.settlementOpen = true;
     for (const player of this.players) clearTimeout(player.disconnectTimer);
     clearTimeout(this.roundTimer);
     clearTimeout(this.intermissionTimer);
+    clearTimeout(this.pauseTimer);
     clearInterval(this.heartbeatTimer);
 
     const warehouseItems = this.warehouse.getSerializableItems();
@@ -583,6 +830,7 @@ export class GameSession {
     const winner = winnerId ? this.players.find((player) => player.id === winnerId) : null;
     this.lastWinnerId = winner?.id || null;
     const finalBid = winner ? lastBidFor(winner) : 0;
+    this.logFinalBidModifiers(this.round - 1);
     const finalProfit = winner ? totalValue - finalBid : 0;
     const dividend = winner && finalProfit < 0 ? Math.ceil(Math.abs(finalProfit) * Math.max(0, this.dividendRatio)) : 0;
     this.wonItemCounts = winner ? countItems(warehouseItems) : {};
@@ -610,7 +858,7 @@ export class GameSession {
     }
 
     if (winner) {
-      deductMoney(winner.profile, finalBid);
+      deductMoneyAllowDebt(winner.profile, finalBid);
       addWarehouseItemsToProfile(winner.profile, warehouseItems);
       addProfileItem(winner.profile, WINNER_REWARD_ITEM_ID, 1);
       extraRewardsByPlayer.get(winner.id).push(rewardItem(this.itemsById, WINNER_REWARD_ITEM_ID));
@@ -646,7 +894,7 @@ export class GameSession {
   sellSettlementItems(player, mode, options = {}) {
     if (!this.settlementOpen) return;
     const winner = this.players.find((entry) => entry.id === this.lastWinnerId);
-    if (winner && player.id !== winner.id) return this.send(player, { type: "error", message: "只有得拍玩家可以出售本局战利品" });
+    if (winner && player.id !== winner.id) return this.send(player, { type: "error", message: "角色技能执行失败" });
     if (!Object.keys(this.wonItemCounts).length) return;
     const counts = {};
     const selectedRarities = new Set(Array.isArray(options.rarities) ? options.rarities : []);
@@ -661,7 +909,7 @@ export class GameSession {
       saveProfileByNickname(this.rootDir, player.profile);
       this.send(player, { type: "settlement_sell_result", body: result });
     } catch (error) {
-      this.send(player, { type: "error", message: error.message });
+      this.send(player, { type: "error", message: "角色技能执行失败" });
     }
   }
 
@@ -682,6 +930,9 @@ export class GameSession {
         hints: this.warehouse.getView(player.gameIndex).hint,
       },
     });
+    if (player.characterId === "character_21" && player.characterState.megumiMode === "makora" && this.round >= 2) {
+      this.sendMegumiPredictionAvailable(player);
+    }
   }
 
   emitCharacterStartHint(player) {
@@ -706,6 +957,10 @@ export class GameSession {
 
   emitCharacterRoundHint(player) {
     try {
+      if (player.characterId === "character_20") {
+        this.emitPucciTargetHint(player);
+        return;
+      }
       const character = createCharacter(player.characterId, this.characterDefinitions.get(player.characterId));
       const hints = character.onRoundStart({
         warehouse: this.warehouse,
@@ -722,6 +977,20 @@ export class GameSession {
       logError("character round skill failed", err, { playerId: player.id, characterId: player.characterId, round: this.round });
       this.send(player, { type: "error", message: "角色技能执行失败" });
     }
+  }
+
+  emitPucciTargetHint(player) {
+    if (player.characterState.madeInHeaven) return;
+    const target = this.warehouse.getItemByIndex(player.characterState.pucciTargetIndex);
+    if (!target) return;
+    const round = this.round;
+    let text = "";
+    if (round === 1) text = `目标战利品的类别包含: ${target.typeLabel || target.type || "未知"}`;
+    else if (round === 2) text = `目标战利品高度为${target.height}格，宽度为${target.width}格`;
+    else if (round === 3) text = `目标战利品品质为${RARITY_LABELS[target.rarity] || target.rarity}色`;
+    else if (round === 4) text = `目标战利品名称为【${target.name}】`;
+    else return;
+    this.send(player, characterTextHint(text, this.characterDefinitions.get(player.characterId)?.image));
   }
 
   sendCharacterHints(player, hints) {
@@ -743,15 +1012,39 @@ export class GameSession {
     if (!first || first.bid <= 0) return { finished: roundIndex === ROUND_COUNT - 1, winnerId: null };
 
     const tied = bids.filter((entry) => entry.bid === first.bid).length > 1;
-    if (roundIndex === ROUND_COUNT - 1) return { finished: true, winnerId: tied ? null : first.player.id };
-
     const ratio = WIN_RATIOS[roundIndex];
-    const thresholdPassed = second.bid === 0 ? first.bid > 0 : first.bid > second.bid * ratio;
+    if (tied) return { finished: roundIndex === ROUND_COUNT - 1, winnerId: null };
+    const globalPassed = roundIndex === ROUND_COUNT - 1 || (second.bid === 0 ? first.bid > 0 : first.bid > second.bid * ratio);
+    const pairPassed = bids
+      .filter((entry) => entry.player.id !== first.player.id)
+      .every((opponent) => {
+        const candidateAdvantage = this.advantages.get(first.player.id, opponent.player.id);
+        const opponentAdvantage = this.advantages.get(opponent.player.id, first.player.id);
+        const required = requiredPairRatio(ratio, candidateAdvantage, opponentAdvantage);
+        return first.bid > opponent.bid * required;
+      });
+    const thresholdPassed = globalPassed && pairPassed;
     return { finished: thresholdPassed, winnerId: thresholdPassed ? first.player.id : null };
   }
 
   bidMultiplierFor(player, roundIndex) {
     let multiplier = 1;
+    if (player.characterState.madeInHeaven) multiplier *= 1.3;
+    if (player.characterId === "character_19") {
+      for (const raidCap of this.players) {
+        const omen = Number(raidCap.characterState?.omenActive?.[player.id] || 0);
+        if (omen > 0) multiplier *= Math.max(0, 1 - omen * 0.05);
+      }
+    }
+    if (player.characterId === "character_21" && player.characterState.megumiMode === "domain" && roundIndex >= 1) {
+      const others = this.players.filter((entry) => entry.id !== player.id).map((entry) => entry.bids[roundIndex - 1] || 0);
+      if (others.length) {
+        const low = Math.min(...others);
+        const high = Math.max(...others);
+        const bid = player.bids[roundIndex] || 0;
+        if (bid > low && bid < high) multiplier *= 1.2;
+      }
+    }
     if (roundIndex === 3) {
       for (const sukuna of this.players) {
         if (sukuna.characterId !== "character_14" || sukuna.id === player.id) continue;
@@ -762,6 +1055,38 @@ export class GameSession {
       }
     }
     return multiplier;
+  }
+
+  logFinalBidModifiers(roundIndex) {
+    if (roundIndex < 0) return;
+    const players = this.players.map((player) => {
+      const rawBid = player.bids[roundIndex] || 0;
+      const multiplier = this.bidMultiplierFor(player, roundIndex);
+      return {
+        id: player.id,
+        nickname: player.nickname,
+        rawBid,
+        multiplier,
+        adjustedBid: Math.ceil(rawBid * multiplier),
+      };
+    });
+    const advantages = this.advantages.entries()
+      .filter((entry) => Number(entry.value) > 0)
+      .map((entry) => ({
+        sourceId: entry.sourceId,
+        source: this.players.find((player) => player.id === entry.sourceId)?.nickname || entry.sourceId,
+        targetId: entry.targetId,
+        target: this.players.find((player) => player.id === entry.targetId)?.nickname || entry.targetId,
+        advantage: entry.value,
+      }));
+    if (!players.some((player) => player.multiplier !== 1) && !advantages.length) return;
+    const lines = [
+      `Final round bid modifiers, round ${roundIndex + 1}:`,
+      ...players.map((player) => `  ${player.nickname}(${player.id}) raw=${player.rawBid} multiplier=${player.multiplier} adjusted=${player.adjustedBid}`),
+      ...(advantages.length ? ["  advantages:", ...advantages.map((entry) => `    ${entry.source} -> ${entry.target}: ${entry.advantage}`)] : []),
+    ];
+    console.log(lines.join("\n"));
+    logInfo("final round bid modifiers", { round: roundIndex + 1, players, advantages });
   }
 
   broadcastPublicState({ clearBidState }) {
@@ -777,9 +1102,8 @@ export class GameSession {
   }
 
   currentCountdownSeconds() {
-    if (!this.started || this.finished || !this.roundStartedAt) return null;
-    const elapsed = Date.now() - this.roundStartedAt;
-    return Math.max(0, Math.ceil((ROUND_MS - elapsed) / 1000) - 2);
+    if (!this.started || this.finished || !this.roundEndsAt) return null;
+    return Math.max(0, Math.ceil(Math.max(0, this.roundEndsAt - Date.now()) / 1000) - 2);
   }
 
   send(player, payload) {
@@ -883,6 +1207,7 @@ function publicPlayer(player) {
     title: player.title || "",
     characterId: player.characterId,
     characterName: player.characterId,
+    characterImageOverride: player.characterId === "character_21" && player.characterState.megumiMode === "makora" ? "/resource/characters/Makora.png" : "",
     money: player.profile.money,
     disconnected: player.disconnected,
     lastBid: lastVisibleBid,
@@ -1014,6 +1339,17 @@ function publicHintItemIndex(warehouse, hint) {
   return 0;
 }
 
-function characterHasRoundOneEffect(characterId) {
-  return new Set(["character_3", "character_4", "character_6", "character_8", "character_9", "character_10", "character_11", "character_13", "character_15", "character_18"]).has(characterId);
+function itemsShareEdge(a, b) {
+  if (!a || !b) return false;
+  const verticalTouch = a.x + a.width === b.x || b.x + b.width === a.x;
+  const verticalOverlap = a.y < b.y + b.height && b.y < a.y + a.height;
+  const horizontalTouch = a.y + a.height === b.y || b.y + b.height === a.y;
+  const horizontalOverlap = a.x < b.x + b.width && b.x < a.x + a.width;
+  return (verticalTouch && verticalOverlap) || (horizontalTouch && horizontalOverlap);
 }
+
+function characterHasRoundOneEffect(characterId) {
+  return new Set(["character_3", "character_4", "character_6", "character_8", "character_9", "character_10", "character_11", "character_13", "character_15", "character_18", "character_20"]).has(characterId);
+}
+
+

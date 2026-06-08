@@ -4,6 +4,7 @@ import path from "node:path";
 export const PRODUCTION_SLOT_COUNT = 3;
 export const PRODUCTION_INPUT_COUNT = 4;
 export const PRODUCTION_OUTPUT_COUNT = 2;
+export const PRODUCTION_MAX_PAGES = 10;
 
 export function loadProductionRecipes(rootDir, itemsById) {
   const filePath = path.join(rootDir, "production.json");
@@ -19,25 +20,49 @@ export function loadProductionRecipes(rootDir, itemsById) {
 }
 
 export function normalizeProductionState(state) {
+  if (Array.isArray(state?.pages)) {
+    const pages = Array.from({ length: PRODUCTION_MAX_PAGES }, (_, index) => {
+      const pageNumber = index + 1;
+      const source = state.pages.find((page) => Number(page?.page) === pageNumber) || state.pages[index] || {};
+      return normalizeProductionPage(source, pageNumber, pageNumber === 1);
+    });
+    return { currentPage: clampPage(state.currentPage || state.page || 1), pages };
+  }
+
   const slots = Array.isArray(state?.slots) ? state.slots : [];
   return {
-    slots: Array.from({ length: PRODUCTION_SLOT_COUNT }, (_, index) => normalizeProductionSlot(slots[index])),
+    currentPage: 1,
+    pages: Array.from({ length: PRODUCTION_MAX_PAGES }, (_, index) => {
+      const pageNumber = index + 1;
+      return normalizeProductionPage(
+        {
+          page: pageNumber,
+          open: pageNumber === 1,
+          slots: pageNumber === 1 ? slots : [],
+        },
+        pageNumber,
+        pageNumber === 1,
+      );
+    }),
   };
 }
 
 export function runProduction(profile, recipes, random = Math.random) {
   const production = normalizeProductionState(profile.production);
   let changed = false;
-  for (const slot of production.slots) {
-    const recipe = recipes.find((entry) => entry.recipe_id === slot.recipeId);
-    if (!recipe || !productionInputsSatisfied(slot, recipe)) continue;
-    recipe.products.forEach((product, index) => {
-      if (!product || random() > product.probability) return;
-      const output = slot.outputs[index];
-      if (output && output.id !== product.id) return;
-      slot.outputs[index] = { id: product.id, count: (output?.count || 0) + 1 };
-      changed = true;
-    });
+  for (const page of production.pages) {
+    if (!page.open) continue;
+    for (const slot of page.slots) {
+      const recipe = recipes.find((entry) => entry.recipe_id === slot.recipeId);
+      if (!recipe || !productionInputsSatisfied(slot, recipe)) continue;
+      recipe.products.forEach((product, index) => {
+        if (!product || random() > product.probability) return;
+        const output = slot.outputs[index];
+        if (output && output.id !== product.id) return;
+        slot.outputs[index] = { id: product.id, count: (output?.count || 0) + 1 };
+        changed = true;
+      });
+    }
   }
   profile.production = production;
   return changed;
@@ -88,6 +113,20 @@ function normalizeProductionSlot(slot) {
     inputs: Array.from({ length: PRODUCTION_INPUT_COUNT }, (_, index) => normalizeItemStack(slot?.inputs?.[index], 1)),
     outputs: Array.from({ length: PRODUCTION_OUTPUT_COUNT }, (_, index) => normalizeItemStack(slot?.outputs?.[index], null)),
   };
+}
+
+function normalizeProductionPage(page, pageNumber, defaultOpen) {
+  const slots = Array.isArray(page?.slots) ? page.slots : [];
+  return {
+    page: pageNumber,
+    open: pageNumber === 1 ? true : Boolean(page?.open ?? defaultOpen),
+    slots: Array.from({ length: PRODUCTION_SLOT_COUNT }, (_, index) => normalizeProductionSlot(slots[index])),
+  };
+}
+
+function clampPage(value) {
+  const page = Math.floor(Number(value) || 1);
+  return Math.max(1, Math.min(PRODUCTION_MAX_PAGES, page));
 }
 
 function normalizeItemStack(value, forcedCount) {

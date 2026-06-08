@@ -20,6 +20,8 @@ export function acceptWebSocket(req, socket) {
       "",
     ].join("\r\n"),
   );
+  socket.setKeepAlive?.(true, 10_000);
+  socket.setTimeout?.(0);
   return true;
 }
 

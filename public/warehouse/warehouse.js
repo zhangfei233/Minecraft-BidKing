@@ -1,4 +1,4 @@
-const rarityColors = { red: "#ff6060", gold: "#faff75", purple: "#964aca", blue: "#7b8afc", green: "#95de93", gray: "#c7c7c7" };
+﻿const rarityColors = { red: "#ff6060", gold: "#faff75", purple: "#964aca", blue: "#7b8afc", green: "#95de93", gray: "#c7c7c7" };
 const levelRarities = ["gray", "green", "blue", "purple", "gold", "red"];
 const itemTypes = ["decoration", "ore", "tool", "equipment", "natural", "food", "tech", "magic", "mob", "book", "multiblock", "loot"];
 const typeLabels = {
@@ -128,12 +128,12 @@ function connectWarehouse() {
     if (msg.type === "sell_result") showMessage(`出售获得 $${formatNumber(msg.body.total)}`);
     if (msg.type === "production_collect_result") {
       const body = msg.body || {};
-      showMessage(body.mode === "sell" ? `出售获得了 $${formatNumber(body.total)}` : `将 ${body.itemName} * ${formatNumber(body.count)} 存入了仓库`);
+      showMessage(body.mode === "sell" ? `出售获得了 ${formatNumber(body.total)}` : `将 ${body.itemName} * ${formatNumber(body.count)} 存入了仓库`);
     }
     if (msg.type === "lottery_result") showMessage("抽奖完成");
     if (msg.type === "lottery_collect_result") {
       const body = msg.body || {};
-      showMessage(body.mode === "take" ? "抽奖结果已存入仓库" : `出售获得了 $${formatNumber(body.total || 0)}`);
+      showMessage(body.mode === "take" ? "抽奖结果已存入仓库" : `出售获得了 ${formatNumber(body.total || 0)}`);
     }
     if (msg.type === "error") showMessage(msg.message || "操作失败");
   });
@@ -218,8 +218,8 @@ function render() {
   document.querySelector(".warehouse-page").classList.toggle("production-mode", productionMode || lotteryMode);
   document.querySelector(".filters").hidden = productionMode || lotteryMode;
   itemsGrid.hidden = productionMode || lotteryMode;
-  productionGrid.hidden = !productionMode;
-  lotteryPanel.hidden = !lotteryMode;
+  if (productionGrid) productionGrid.hidden = !productionMode;
+  if (lotteryPanel) lotteryPanel.hidden = !lotteryMode;
   if (contentBackButton) contentBackButton.hidden = !(productionMode || lotteryMode);
   updateKindOptions();
   document.querySelectorAll("#sortSelect, #selectAllButton, #clearSelectionButton, #selectUnfavoriteButton, #sellAllButton, #sellPartialButton, #toggleFavoriteButton")
@@ -261,14 +261,14 @@ function renderLottery() {
       <button id="favoriteLotteryButton" type="button">一键收藏抽奖道具</button>
       <p>${heldCount > 0 ? `当前有 ${formatNumber(heldCount)} 个抽奖道具` : "当前无抽奖道具"}</p>
       <div class="lottery-consume-slot">${slotItem ? `<img src="${slotItem.image}" alt="" /><strong>${escapeHtml(slotItem.name)}</strong>` : "<span>+</span>"}</div>
-      <button id="drawLotteryButton" type="button" ${!state.lottery.slot || hasResults ? "disabled" : ""}>抽奖</button>
+      <button id="drawLotteryButton" type="button" ${!state.lottery.slot || hasResults ? "disabled" : ""}>鎶藉</button>
       <button id="refillLotteryButton" type="button" ${heldCount <= 0 || state.lottery.slot || hasResults ? "disabled" : ""}>补充道具</button>
     </section>
     <section class="lottery-results">
       <div class="lottery-result-grid">${(state.lottery.results || []).map(lotteryResultCard).join("")}</div>
       <footer>
-        <strong>总价值: ${formatNumber(totalValue)}</strong>
-        <button id="takeLotteryButton" type="button" ${hasResults ? "" : "disabled"}>领取</button>
+        <strong>鎬讳环鍊? ${formatNumber(totalValue)}</strong>
+        <button id="takeLotteryButton" type="button" ${hasResults ? "" : "disabled"}>棰嗗彇</button>
         <button id="sellLotteryButton" type="button" ${hasResults ? "" : "disabled"}>出售</button>
         <button id="sellUnfavoriteLotteryButton" type="button" ${hasResults ? "" : "disabled"}>出售非收藏</button>
       </footer>
@@ -473,7 +473,7 @@ function showOutputBubble(anchor, slot, outputIndex) {
     <button class="bubble-close" type="button">×</button>
     <strong>${escapeHtml(item.name)} x${formatNumber(output.count)}</strong>
     <div class="bubble-actions">
-      <button type="button" data-mode="take">拿去</button>
+      <button type="button" data-mode="take">鎷垮幓</button>
       <button type="button" data-mode="sell">出售</button>
     </div>
   `;
@@ -491,11 +491,8 @@ function showOutputBubble(anchor, slot, outputIndex) {
 }
 
 function sellSelected(quantity) {
-  if (state.kind !== "items") {
-    showMessage("道具暂不支持出售");
-    return;
-  }
-  socket?.send(JSON.stringify({ type: "sell_items", itemIds: [...state.selected].map(Number), quantity }));
+  if (state.kind === "props") socket?.send(JSON.stringify({ type: "sell_props", propIds: [...state.selected], quantity }));
+  else socket?.send(JSON.stringify({ type: "sell_items", itemIds: [...state.selected].map(Number), quantity }));
 }
 
 function normalizeRecipes(entries) {
@@ -609,3 +606,7 @@ function playSound(name) {
   audio.currentTime = 0;
   audio.play().catch(() => {});
 }
+
+
+
+

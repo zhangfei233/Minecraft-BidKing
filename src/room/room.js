@@ -1,4 +1,4 @@
-import fs from "node:fs";
+﻿import fs from "node:fs";
 import path from "node:path";
 import { loadDefinitions } from "../game/definitions.js";
 import { validateSelections } from "../game/GameSession.js";
@@ -13,11 +13,12 @@ import {
   removeProfileItem,
   saveProfileByNickname,
   sellProfileItems,
+  sellProfileProps,
   setFavorite,
   toggleFavorite,
 } from "../player/profile.js";
 import { acceptWebSocket, decodeWsText, sendWsJson } from "../net/websocket.js";
-import { loadProductionRecipes, normalizeProductionState } from "../production/production.js";
+import { PRODUCTION_MAX_PAGES, loadProductionRecipes, normalizeProductionState } from "../production/production.js";
 
 const MAX_PLAYERS = 4;
 const HEARTBEAT_TIMEOUT_MS = 20_000;
@@ -38,17 +39,18 @@ export function createRoom({ rootDir, onGameStart }) {
   const heartbeatTimer = setInterval(() => {
     const now = Date.now();
     for (const player of players.values()) {
-      if (!player.inGame && !player.sideConnections && now > (player.sidePageGraceUntil || 0) && now - player.lastSeen > HEARTBEAT_TIMEOUT_MS) removePlayer(player.id);
+      if (!player.inGame && !player.sideConnections && now > (player.sidePageGraceUntil || 0) && isRoomPlayerStale(player, now)) removePlayer(player.id);
     }
     for (const [id, player] of disconnectedPlayers) {
       if (now - player.lastSeen > 120_000) disconnectedPlayers.delete(id);
     }
-  }, 15_000);
+  }, 5_000);
   heartbeatTimer.unref?.();
 
   function handleUpgrade(req, socket, requestUrl) {
     if (requestUrl.pathname !== "/room-ws") return false;
     if (!acceptWebSocket(req, socket)) return true;
+    cleanupStaleRoomPlayers();
 
     const resumeId = requestUrl.searchParams.get("playerId");
     if (resumeId) {
@@ -69,9 +71,7 @@ export function createRoom({ rootDir, onGameStart }) {
     const nickname = normalizeNickname(requestUrl.searchParams.get("nickname"));
     if (!nickname) return reject(socket, "昵称不能为空");
     const existing = [...players.values()].find((player) => player.nickname === nickname);
-    if (existing) {
-      return reject(socket, "房间内已经有同昵称玩家");
-    }
+    if (existing) return reject(socket, "房间内已经有同昵称玩家");
     if (players.size >= maxPlayers) return reject(socket, "房间已满");
 
     const profile = ensureProfile(rootDir, nickname);
@@ -88,6 +88,7 @@ export function createRoom({ rootDir, onGameStart }) {
       lastSeen: Date.now(),
       sideConnections: 0,
       sidePageGraceUntil: 0,
+      roomDisconnectedAt: 0,
     };
 
     players.set(player.id, player);
@@ -105,6 +106,7 @@ export function createRoom({ rootDir, onGameStart }) {
     const previousSocket = player.socket;
     player.socket = socket;
     player.lastSeen = Date.now();
+    player.roomDisconnectedAt = 0;
     attachSocket(player, socket);
     if (previousSocket && previousSocket !== socket) previousSocket.destroy();
     sendWsJson(socket, {
@@ -118,18 +120,27 @@ export function createRoom({ rootDir, onGameStart }) {
 
   function attachSocket(player, socket) {
     socket.on("data", (buffer) => handleMessage(player, buffer));
-    socket.on("close", () => {
-      scheduleDisconnectRemoval(player, socket);
-    });
-    socket.on("error", () => {
-      scheduleDisconnectRemoval(player, socket);
-    });
+    socket.on("close", () => scheduleDisconnectRemoval(player, socket));
+    socket.on("error", () => scheduleDisconnectRemoval(player, socket));
   }
 
   function scheduleDisconnectRemoval(player, socket) {
     if (player.inGame || player.socket !== socket) return;
     player.lastSeen = Date.now();
+    player.roomDisconnectedAt = Date.now();
     broadcastRoomState();
+  }
+
+  function cleanupStaleRoomPlayers() {
+    const now = Date.now();
+    for (const player of [...players.values()]) {
+      if (!player.inGame && !player.sideConnections && now > (player.sidePageGraceUntil || 0) && isRoomPlayerStale(player, now)) removePlayer(player.id);
+    }
+  }
+
+  function isRoomPlayerStale(player, now = Date.now()) {
+    if (isSocketClosed(player.socket)) return now - (player.roomDisconnectedAt || player.lastSeen || 0) >= HEARTBEAT_TIMEOUT_MS;
+    return now - (player.lastSeen || 0) >= HEARTBEAT_TIMEOUT_MS;
   }
 
   function handleWarehouseUpgrade(req, socket, requestUrl) {
@@ -137,19 +148,7 @@ export function createRoom({ rootDir, onGameStart }) {
     if (!acceptWebSocket(req, socket)) return true;
     const player = resolvePlayerForSideConnection(requestUrl.searchParams.get("playerId"), socket);
     if (!player) return rejectWs(socket, "只有房间内玩家可以访问仓库");
-    player.lastSeen = Date.now();
-    player.sidePageGraceUntil = 0;
-    player.sideConnections = (player.sideConnections || 0) + 1;
-    sendWarehouseState(player, socket);
-    socket.on("data", (buffer) => {
-      player.lastSeen = Date.now();
-      handleWarehouseMessage(player, socket, buffer);
-    });
-    socket.on("close", () => {
-      player.sideConnections = Math.max(0, (player.sideConnections || 0) - 1);
-      player.sidePageGraceUntil = Date.now() + HEARTBEAT_TIMEOUT_MS;
-    });
-    socket.on("error", () => {});
+    attachSideSocket(player, socket, () => sendWarehouseState(player, socket), (buffer) => handleWarehouseMessage(player, socket, buffer));
     return true;
   }
 
@@ -158,20 +157,42 @@ export function createRoom({ rootDir, onGameStart }) {
     if (!acceptWebSocket(req, socket)) return true;
     const player = resolvePlayerForSideConnection(requestUrl.searchParams.get("playerId"), socket);
     if (!player) return rejectWs(socket, "只有房间内玩家可以访问商城");
+    attachSideSocket(player, socket, () => sendShopState(player, socket), (buffer) => handleShopMessage(player, socket, buffer));
+    return true;
+  }
+
+  function handleProductionUpgrade(req, socket, requestUrl) {
+    if (requestUrl.pathname !== "/production-ws") return false;
+    if (!acceptWebSocket(req, socket)) return true;
+    const player = resolvePlayerForSideConnection(requestUrl.searchParams.get("playerId"), socket);
+    if (!player) return rejectWs(socket, "只有房间内玩家可以访问仓库");
+    attachSideSocket(player, socket, () => sendProductionState(player, socket), (buffer) => handleProductionMessage(player, socket, buffer));
+    return true;
+  }
+
+  function handleLotteryUpgrade(req, socket, requestUrl) {
+    if (requestUrl.pathname !== "/lottery-ws") return false;
+    if (!acceptWebSocket(req, socket)) return true;
+    const player = resolvePlayerForSideConnection(requestUrl.searchParams.get("playerId"), socket);
+    if (!player) return rejectWs(socket, "只有房间内玩家可以访问仓库");
+    attachSideSocket(player, socket, () => sendLotteryState(player, socket), (buffer) => handleLotteryMessage(player, socket, buffer));
+    return true;
+  }
+
+  function attachSideSocket(player, socket, sendInitial, onMessage) {
     player.lastSeen = Date.now();
     player.sidePageGraceUntil = 0;
     player.sideConnections = (player.sideConnections || 0) + 1;
-    sendShopState(player, socket);
+    sendInitial();
     socket.on("data", (buffer) => {
       player.lastSeen = Date.now();
-      handleShopMessage(player, socket, buffer);
+      onMessage(buffer);
     });
     socket.on("close", () => {
       player.sideConnections = Math.max(0, (player.sideConnections || 0) - 1);
       player.sidePageGraceUntil = Date.now() + HEARTBEAT_TIMEOUT_MS;
     });
     socket.on("error", () => {});
-    return true;
   }
 
   function resolvePlayerForSideConnection(playerId, socket) {
@@ -198,34 +219,30 @@ export function createRoom({ rootDir, onGameStart }) {
       return;
     }
     if (message.type === "heartbeat") return;
-
     if (message.type === "enter_side_page") {
       player.sidePageGraceUntil = Date.now() + 5 * 60_000;
       return;
     }
-
     if (message.type === "set_selection") {
       if (!player.inGame) applySelection(player, message.selection);
       broadcastRoomState();
       return;
     }
-
     if (message.type === "set_ready") {
       if (player.inGame) return sendWsJson(player.socket, { type: "error", message: "游戏中不能准备下一局" });
+      if (player.profile.money < 0) return sendWsJson(player.socket, { type: "error", message: "金钱为负时不能准备" });
       applySelection(player, message.selection);
       if (isHost(player.id)) return sendWsJson(player.socket, { type: "error", message: "房主不能设置准备状态" });
       player.ready = Boolean(message.ready);
       broadcastRoomState();
       return;
     }
-
     if (message.type === "save_loadout") {
       player.profile.settings.propLoadout = normalizeLoadout(message.props, propDefinitions);
       saveProfileByNickname(rootDir, player.profile);
       sendWsJson(player.socket, { type: "loadout_saved", message: "配置已保存" });
       return;
     }
-
     if (message.type === "use_loadout") {
       const loadout = normalizeLoadout(player.profile.settings.propLoadout, propDefinitions);
       const validation = validatePropCounts(player.profile, loadout);
@@ -236,7 +253,6 @@ export function createRoom({ rootDir, onGameStart }) {
       broadcastRoomState();
       return;
     }
-
     if (message.type === "start_game") {
       applySelection(player, message.selection);
       if (!isHost(player.id)) return sendWsJson(player.socket, { type: "error", message: "只有房主可以开始游戏" });
@@ -253,7 +269,7 @@ export function createRoom({ rootDir, onGameStart }) {
         }));
       const validation = validateSelections(gamePlayers);
       if (!validation.ok) return sendWsJson(player.socket, { type: "error", message: validation.message });
-      if (gamePlayers.some((gamePlayer) => gamePlayer.profile.money < currentContainer.entryFee)) {
+      if (gamePlayers.some((gamePlayer) => gamePlayer.profile.money < 0 || gamePlayer.profile.money < currentContainer.entryFee)) {
         return sendWsJson(player.socket, { type: "error", message: "有玩家余额不足" });
       }
       for (const gamePlayer of gamePlayers) {
@@ -292,6 +308,14 @@ export function createRoom({ rootDir, onGameStart }) {
       }
       if (message.type === "sell_items") {
         const result = sellProfileItems(player.profile, message.itemIds || [], message.quantity, itemsById);
+        saveProfileByNickname(rootDir, player.profile);
+        sendWsJson(socket, { type: "sell_result", body: result });
+        sendWarehouseState(player, socket);
+        broadcastRoomState();
+        return;
+      }
+      if (message.type === "sell_props") {
+        const result = sellProfileProps(player.profile, message.propIds || [], message.quantity, propDefinitions);
         saveProfileByNickname(rootDir, player.profile);
         sendWsJson(socket, { type: "sell_result", body: result });
         sendWarehouseState(player, socket);
@@ -387,6 +411,86 @@ export function createRoom({ rootDir, onGameStart }) {
     }
   }
 
+  function handleProductionMessage(player, socket, buffer) {
+    const message = readJson(buffer);
+    if (!message) return sendWsJson(socket, { type: "error", message: "消息格式错误" });
+    if (message.type === "heartbeat") return;
+    try {
+      if (message.type === "production_set_page") {
+        player.profile.production = normalizeProductionState(player.profile.production);
+        player.profile.production.currentPage = clampProductionPage(message.page);
+        saveProfileByNickname(rootDir, player.profile);
+        sendProductionState(player, socket);
+        return;
+      }
+      if (message.type === "toggle_favorite") {
+        const itemId = Number(message.itemId);
+        const collected = toggleFavorite(player.profile, itemId);
+        saveProfileByNickname(rootDir, player.profile);
+        sendWsJson(socket, { type: "favorite_updated", body: { itemId, collected } });
+        sendProductionState(player, socket);
+        return;
+      }
+      if (message.type === "production_buy_page") {
+        const result = buyProductionPage(player);
+        saveProfileByNickname(rootDir, player.profile);
+        sendWsJson(socket, { type: "production_buy_result", body: result });
+        sendProductionState(player, socket);
+        broadcastRoomState();
+        return;
+      }
+      if (message.type === "production_collect_all") {
+        const result = collectAllProductionOutputs(player, message.mode);
+        saveProfileByNickname(rootDir, player.profile);
+        sendWsJson(socket, { type: "production_collect_all_result", body: result });
+        sendProductionState(player, socket);
+        broadcastRoomState();
+        return;
+      }
+      if (message.type === "production_set_recipe") setProductionRecipe(player, Number(message.slot), Number(message.recipeId), message.page);
+      else if (message.type === "production_place_input") placeProductionInput(player, Number(message.slot), Number(message.inputIndex), message.page);
+      else if (message.type === "production_remove_input") removeProductionInput(player, Number(message.slot), Number(message.inputIndex), message.page);
+      else if (message.type === "production_favorite_inputs") for (const id of productionRequirementIds(productionRecipes)) setFavorite(player.profile, id, true);
+      else if (message.type === "production_collect") {
+        const result = collectProductionOutput(player, Number(message.slot), Number(message.outputIndex), message.mode, message.page);
+        sendWsJson(socket, { type: "production_collect_result", body: result });
+      } else if (message.type === "warehouse_clear_notification") {
+        clearWarehouseNotification(player, "production");
+      } else {
+        return;
+      }
+      saveProfileByNickname(rootDir, player.profile);
+      sendProductionState(player, socket);
+    } catch (error) {
+      sendWsJson(socket, { type: "error", message: error.message });
+    }
+  }
+
+  function handleLotteryMessage(player, socket, buffer) {
+    const message = readJson(buffer);
+    if (!message) return sendWsJson(socket, { type: "error", message: "消息格式错误" });
+    if (message.type === "heartbeat") return;
+    try {
+      if (message.type === "lottery_refill") refillLottery(player);
+      else if (message.type === "lottery_draw") sendWsJson(socket, { type: "lottery_result", body: performLottery(player) });
+      else if (message.type === "lottery_collect") {
+        const result = collectLotteryResults(player, message.mode);
+        sendWsJson(socket, { type: "lottery_collect_result", body: result });
+        broadcastRoomState();
+      } else if (message.type === "lottery_favorite_consumes") {
+        for (const id of lotteryConsumableIds(lotteryRecipes)) setFavorite(player.profile, id, true);
+      } else if (message.type === "warehouse_clear_notification") {
+        clearWarehouseNotification(player, "lottery");
+      } else {
+        return;
+      }
+      saveProfileByNickname(rootDir, player.profile);
+      sendLotteryState(player, socket);
+    } catch (error) {
+      sendWsJson(socket, { type: "error", message: error.message });
+    }
+  }
+
   function completeGame(finalPlayers = []) {
     const finalPropsById = new Map(finalPlayers.map((player) => [player.id, player.props || []]));
     const now = Date.now();
@@ -438,8 +542,42 @@ export function createRoom({ rootDir, onGameStart }) {
     });
   }
 
-  function setProductionRecipe(player, slotIndex, recipeId) {
-    const slot = getProductionSlot(player, slotIndex);
+  function sendProductionState(player, socket) {
+    sendWsJson(socket, {
+      type: "production_state",
+      body: {
+        money: player.profile.money,
+        items: player.profile.warehouse.items,
+        production: normalizeProductionState(player.profile.production),
+        productionRecipes,
+        notifications: {
+          production: Boolean(player.profile.settings?.warehouseNotifications?.production),
+          lottery: Boolean(player.profile.settings?.warehouseNotifications?.lottery),
+        },
+      },
+    });
+  }
+
+  function sendLotteryState(player, socket) {
+    sendWsJson(socket, {
+      type: "lottery_state",
+      body: {
+        money: player.profile.money,
+        items: player.profile.warehouse.items,
+        props: player.profile.warehouse.props,
+        lottery: normalizeLotteryState(player.profile.lottery),
+        lotteryRecipes: publicLotteryRecipes(lotteryRecipes),
+        propDefinitions: Object.fromEntries(propDefinitions),
+        notifications: {
+          production: Boolean(player.profile.settings?.warehouseNotifications?.production),
+          lottery: Boolean(player.profile.settings?.warehouseNotifications?.lottery),
+        },
+      },
+    });
+  }
+
+  function setProductionRecipe(player, slotIndex, recipeId, pageNumber = null) {
+    const slot = getProductionSlot(player, slotIndex, pageNumber);
     if (slot.outputs.some(Boolean)) throw new Error("\u8bf7\u5148\u5904\u7406\u4ea7\u7269\u683c\u4e2d\u7684\u7269\u54c1");
     const returnedInputs = slot.inputs.filter(Boolean);
     if (!recipeId) {
@@ -449,16 +587,16 @@ export function createRoom({ rootDir, onGameStart }) {
       return;
     }
     const recipe = productionRecipes.find((entry) => entry.recipe_id === recipeId);
-    if (!recipe) throw new Error("\u672a\u77e5\u751f\u4ea7\u914d\u65b9");
+    if (!recipe) throw new Error("该物品不是抽奖道具");
     slot.recipeId = recipe.recipe_id;
     slot.inputs = [null, null, null, null];
     for (const input of returnedInputs) addProfileItem(player.profile, input.id, input.count);
   }
 
-  function placeProductionInput(player, slotIndex, inputIndex) {
-    const slot = getProductionSlot(player, slotIndex);
+  function placeProductionInput(player, slotIndex, inputIndex, pageNumber = null) {
+    const slot = getProductionSlot(player, slotIndex, pageNumber);
     const recipe = productionRecipes.find((entry) => entry.recipe_id === slot.recipeId);
-    if (!recipe) throw new Error("\u8bf7\u5148\u9009\u62e9\u914d\u65b9");
+    if (!recipe) throw new Error("该物品不是抽奖道具");
     if (!Number.isInteger(inputIndex) || inputIndex < 0 || inputIndex >= 4) throw new Error("\u751f\u4ea7\u683c\u65e0\u6548");
     const itemId = recipe.recipe[inputIndex];
     if (!itemId) throw new Error("\u8be5\u914d\u65b9\u4e0d\u9700\u8981\u8fd9\u4e2a\u683c\u5b50");
@@ -467,8 +605,8 @@ export function createRoom({ rootDir, onGameStart }) {
     slot.inputs[inputIndex] = { id: itemId, count: 1 };
   }
 
-  function removeProductionInput(player, slotIndex, inputIndex) {
-    const slot = getProductionSlot(player, slotIndex);
+  function removeProductionInput(player, slotIndex, inputIndex, pageNumber = null) {
+    const slot = getProductionSlot(player, slotIndex, pageNumber);
     if (!Number.isInteger(inputIndex) || inputIndex < 0 || inputIndex >= 4) throw new Error("\u751f\u4ea7\u683c\u65e0\u6548");
     const input = slot.inputs[inputIndex];
     if (!input) return;
@@ -476,8 +614,8 @@ export function createRoom({ rootDir, onGameStart }) {
     addProfileItem(player.profile, input.id, input.count);
   }
 
-  function collectProductionOutput(player, slotIndex, outputIndex, mode = "take") {
-    const slot = getProductionSlot(player, slotIndex);
+  function collectProductionOutput(player, slotIndex, outputIndex, mode = "take", pageNumber = null) {
+    const slot = getProductionSlot(player, slotIndex, pageNumber);
     if (!Number.isInteger(outputIndex) || outputIndex < 0 || outputIndex >= 2) throw new Error("\u4ea7\u7269\u683c\u65e0\u6548");
     const output = slot.outputs[outputIndex];
     if (!output || output.count <= 0) throw new Error("\u8be5\u4ea7\u7269\u683c\u4e3a\u7a7a");
@@ -495,9 +633,50 @@ export function createRoom({ rootDir, onGameStart }) {
     return result;
   }
 
+  function buyProductionPage(player) {
+    player.profile.production = normalizeProductionState(player.profile.production);
+    const opened = player.profile.production.pages.filter((page) => page.open).length;
+    if (opened >= PRODUCTION_MAX_PAGES) throw new Error("车间页已达上限");
+    const price = opened * 1_000_000;
+    if (player.profile.money < price) throw new Error("金钱不足");
+    player.profile.money -= price;
+    const page = player.profile.production.pages.find((entry) => !entry.open);
+    page.open = true;
+    player.profile.production.currentPage = page.page;
+    return { page: page.page, price, money: player.profile.money };
+  }
+
+  function collectAllProductionOutputs(player, mode = "take") {
+    player.profile.production = normalizeProductionState(player.profile.production);
+    const handled = [];
+    let total = 0;
+    for (const page of player.profile.production.pages) {
+      if (!page.open) continue;
+      for (const slot of page.slots) {
+        for (let outputIndex = 0; outputIndex < slot.outputs.length; outputIndex += 1) {
+          const output = slot.outputs[outputIndex];
+          if (!output) continue;
+          const item = itemsById.get(output.id);
+          if (!item) continue;
+          const entry = { id: output.id, name: item.name, count: output.count, subtotal: 0 };
+          slot.outputs[outputIndex] = null;
+          if (mode === "sell") {
+            entry.subtotal = output.count * Number(item.price || 0);
+            total += entry.subtotal;
+          } else {
+            addProfileItem(player.profile, output.id, output.count);
+          }
+          handled.push(entry);
+        }
+      }
+    }
+    if (mode === "sell" && total > 0) addMoney(player.profile, total);
+    return { mode, handled, total, money: player.profile.money };
+  }
+
   function refillLottery(player) {
     player.profile.lottery = normalizeLotteryState(player.profile.lottery);
-    if (player.profile.lottery.results.length) throw new Error("请先处理抽奖结果");
+    if (player.profile.lottery.results.length) throw new Error("请先领取或出售当前抽奖结果");
     if (player.profile.lottery.slot) return;
     const ids = lotteryConsumableIds(lotteryRecipes);
     const id = ids.find((itemId) => (player.profile.warehouse.items[String(itemId)]?.count || 0) > 0);
@@ -551,10 +730,12 @@ export function createRoom({ rootDir, onGameStart }) {
     return Number(itemsById.get(Number(result.id))?.price || 0) * result.count;
   }
 
-  function getProductionSlot(player, slotIndex) {
+  function getProductionSlot(player, slotIndex, pageNumber = null) {
     player.profile.production = normalizeProductionState(player.profile.production);
-    if (!Number.isInteger(slotIndex) || slotIndex < 0 || slotIndex >= player.profile.production.slots.length) throw new Error("生产槽无效");
-    return player.profile.production.slots[slotIndex];
+    const page = player.profile.production.pages.find((entry) => entry.page === clampProductionPage(pageNumber || player.profile.production.currentPage));
+    if (!page?.open) throw new Error("生产车间页未开通");
+    if (!Number.isInteger(slotIndex) || slotIndex < 0 || slotIndex >= page.slots.length) throw new Error("生产槽无效");
+    return page.slots[slotIndex];
   }
 
   function roomSnapshot(viewerId) {
@@ -569,6 +750,10 @@ export function createRoom({ rootDir, onGameStart }) {
       players: [...players.values()].map((player) => ({ ...clientPlayer(player), isHost: player.id === hostId })),
       characters: Object.fromEntries(characterDefinitions),
       props: Object.fromEntries(propDefinitions),
+      notifications: viewerId ? {
+        production: Boolean(players.get(viewerId)?.profile.settings?.warehouseNotifications?.production),
+        lottery: Boolean(players.get(viewerId)?.profile.settings?.warehouseNotifications?.lottery),
+      } : { production: false, lottery: false },
     };
   }
 
@@ -622,7 +807,7 @@ export function createRoom({ rootDir, onGameStart }) {
     const candidates = [...players.values()].filter((player) => !player.inGame);
     if (candidates.length < 2) return false;
     const hostId = getHostId();
-    return candidates.every((player) => !isSocketClosed(player.socket) && (player.id === hostId || player.ready));
+    return candidates.every((player) => player.profile.money >= 0 && !isSocketClosed(player.socket) && (player.id === hostId || player.ready));
   }
 
   function createPlayerId() {
@@ -633,7 +818,72 @@ export function createRoom({ rootDir, onGameStart }) {
     return id;
   }
 
-  return { handleUpgrade, handleWarehouseUpgrade, handleShopUpgrade, completeGame };
+  return {
+    handleUpgrade,
+    handleWarehouseUpgrade,
+    handleShopUpgrade,
+    handleProductionUpgrade,
+    handleLotteryUpgrade,
+    completeGame,
+    listPlayers,
+    findPlayer,
+    kickPlayer,
+    giveMoney,
+    setMoney,
+    giveItem,
+    giveProp,
+  };
+
+  function listPlayers() {
+    return [...players.values()].map((player) => ({ id: player.id, nickname: player.nickname, money: player.profile.money, ready: player.ready, inGame: player.inGame }));
+  }
+
+  function findPlayer(ref) {
+    return players.get(String(ref)) || [...players.values()].find((player) => player.nickname === ref);
+  }
+
+  function kickPlayer(ref) {
+    const player = findPlayer(ref);
+    if (!player) return false;
+    removePlayer(player.id);
+    return true;
+  }
+
+  function giveMoney(ref, amount) {
+    const player = findPlayer(ref);
+    if (!player) throw new Error("player not found");
+    addMoney(player.profile, amount);
+    saveProfileByNickname(rootDir, player.profile);
+    broadcastRoomState();
+    return player.profile.money;
+  }
+
+  function setMoney(ref, amount) {
+    const player = findPlayer(ref);
+    if (!player) throw new Error("player not found");
+    player.profile.money = Math.floor(Number(amount) || 0);
+    saveProfileByNickname(rootDir, player.profile);
+    broadcastRoomState();
+    return player.profile.money;
+  }
+
+  function giveItem(ref, id, amount) {
+    const player = findPlayer(ref);
+    if (!player) throw new Error("player not found");
+    addProfileItem(player.profile, Number(id), Number(amount) || 1);
+    saveProfileByNickname(rootDir, player.profile);
+    return true;
+  }
+
+  function giveProp(ref, id, amount) {
+    const player = findPlayer(ref);
+    if (!player) throw new Error("player not found");
+    const propId = String(id);
+    if (!propDefinitions.has(propId)) throw new Error("unknown prop");
+    player.profile.warehouse.props[propId] = (player.profile.warehouse.props[propId] || 0) + Math.max(1, Math.floor(Number(amount) || 1));
+    saveProfileByNickname(rootDir, player.profile);
+    return true;
+  }
 }
 
 function reject(socket, message) {
@@ -766,6 +1016,11 @@ function clearWarehouseNotification(player, kind) {
   if (kind === "production" || kind === "lottery") player.profile.settings.warehouseNotifications[kind] = false;
 }
 
+function clampProductionPage(value) {
+  const page = Math.floor(Number(value) || 1);
+  return Math.max(1, Math.min(PRODUCTION_MAX_PAGES, page));
+}
+
 function loadContainers(rootDir) {
   const config = JSON.parse(fs.readFileSync(path.join(rootDir, "config.json"), "utf8"));
   const entries = Object.entries(config.containers || {});
@@ -786,3 +1041,5 @@ function entryFeeForK(k) {
   const delta = value - 1;
   return Math.ceil(30000 - 30000 * delta + 75000 * delta ** 2 - 65000 * delta ** 3);
 }
+
+

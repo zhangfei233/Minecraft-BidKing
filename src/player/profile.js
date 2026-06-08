@@ -83,6 +83,13 @@ export function deductMoney(profile, amount) {
   return true;
 }
 
+export function deductMoneyAllowDebt(profile, amount) {
+  normalizeProfile(profile, profile.nickname);
+  const value = Math.max(0, Math.floor(Number(amount) || 0));
+  profile.money -= value;
+  return true;
+}
+
 export function toggleFavorite(profile, itemId) {
   normalizeProfile(profile, profile.nickname);
   const key = String(itemId);
@@ -137,6 +144,28 @@ export function sellProfileItemCounts(profile, itemCounts, itemsById) {
     const subtotal = count * item.price;
     total += subtotal;
     sold.push({ id, count, subtotal });
+  }
+  profile.money += total;
+  return { total, sold, money: profile.money };
+}
+
+export function sellProfileProps(profile, propIds, quantity, propDefinitions) {
+  normalizeProfile(profile, profile.nickname);
+  let total = 0;
+  const sold = [];
+  for (const id of propIds) {
+    const key = String(id);
+    const prop = propDefinitions.get(key);
+    if (!prop) throw new Error(`未知道具: ${id}`);
+    const owned = Math.max(0, Math.floor(Number(profile.warehouse.props[key]) || 0));
+    if (owned <= 0) continue;
+    const count = quantity == null ? owned : Math.min(owned, Math.max(0, Math.floor(Number(quantity) || 0)));
+    if (count <= 0) continue;
+    const subtotal = count * Number(prop.price || 0);
+    profile.warehouse.props[key] = owned - count;
+    if (profile.warehouse.props[key] <= 0) delete profile.warehouse.props[key];
+    total += subtotal;
+    sold.push({ id: key, count, subtotal });
   }
   profile.money += total;
   return { total, sold, money: profile.money };

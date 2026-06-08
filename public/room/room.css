@@ -152,15 +152,28 @@ input {
 }
 
 .nav-buttons {
-  display: flex;
+  display: grid;
+  grid-template-columns: repeat(2, 96px);
   gap: 14px;
   margin-bottom: 24px;
 }
 
 .nav-buttons button {
+  position: relative;
   width: 96px;
   height: 42px;
   font-weight: 800;
+}
+
+.notify-dot {
+  position: absolute;
+  top: 5px;
+  right: 7px;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #33e668;
+  box-shadow: 0 0 10px rgba(51, 230, 104, 0.75);
 }
 
 .left-panel h2,

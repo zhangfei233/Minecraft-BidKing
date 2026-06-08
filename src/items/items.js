@@ -26,7 +26,7 @@ export const FALLBACK_TYPE_LABELS = {
   tech: "科技",
   magic: "魔法",
   mob: "生物",
-  book: "书",
+  book: "书籍",
   multiblock: "多方块",
   loot: "战利品",
 };

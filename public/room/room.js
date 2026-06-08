@@ -46,27 +46,35 @@ readyButton.addEventListener("click", () => {
   else socket.send(JSON.stringify({ type: "set_ready", ready: !me.ready, selection }));
 });
 
-document.querySelector("#warehouseButton").addEventListener("click", () => {
-  if (myId) openSidePage(`/warehouse?playerId=${encodeURIComponent(myId)}`);
-});
-document.querySelector("#shopButton").addEventListener("click", () => {
-  if (myId) openSidePage(`/shop?playerId=${encodeURIComponent(myId)}`);
-});
-document.querySelector("#saveLoadoutButton").addEventListener("click", () => {
-  socket?.send(JSON.stringify({ type: "save_loadout", props: selection.props }));
-});
-document.querySelector("#useLoadoutButton").addEventListener("click", () => {
-  socket?.send(JSON.stringify({ type: "use_loadout" }));
-});
+document.querySelector("#warehouseButton").addEventListener("click", () => openSidePage(`/warehouse?playerId=${encodeURIComponent(myId)}`));
+document.querySelector("#shopButton").addEventListener("click", () => openSidePage(`/shop?playerId=${encodeURIComponent(myId)}`));
+document.querySelector("#productionButton")?.addEventListener("click", () => openSidePage(`/production?playerId=${encodeURIComponent(myId)}`));
+document.querySelector("#lotteryButton")?.addEventListener("click", () => openSidePage(`/lottery?playerId=${encodeURIComponent(myId)}`));
+document.querySelector("#saveLoadoutButton").addEventListener("click", () => socket?.send(JSON.stringify({ type: "save_loadout", props: selection.props })));
+document.querySelector("#useLoadoutButton").addEventListener("click", () => socket?.send(JSON.stringify({ type: "use_loadout" })));
 document.querySelector("#changeCharacterButton").addEventListener("click", () => {
   renderCharacterPicker();
   characterPicker.showModal();
 });
 
+const resumePlayerId = new URLSearchParams(location.search).get("playerId");
+if (resumePlayerId) resumeRoom(resumePlayerId);
+
 function joinRoom(nickname) {
   loginMessage.textContent = "正在加入房间...";
   const protocol = location.protocol === "https:" ? "wss:" : "ws:";
   socket = new WebSocket(`${protocol}//${location.host}/room-ws?nickname=${encodeURIComponent(nickname)}`);
+  attachRoomSocket();
+}
+
+function resumeRoom(playerId) {
+  loginMessage.textContent = "正在返回房间...";
+  const protocol = location.protocol === "https:" ? "wss:" : "ws:";
+  socket = new WebSocket(`${protocol}//${location.host}/room-ws?playerId=${encodeURIComponent(playerId)}`);
+  attachRoomSocket();
+}
+
+function attachRoomSocket() {
   socket.addEventListener("open", () => {
     heartbeatTimer = setInterval(() => socket.readyState === WebSocket.OPEN && socket.send(JSON.stringify({ type: "heartbeat" })), 10_000);
   });
@@ -82,20 +90,6 @@ function joinRoom(nickname) {
   socket.addEventListener("error", () => {
     loginMessage.textContent = "连接失败";
   });
-}
-
-const resumePlayerId = new URLSearchParams(location.search).get("playerId");
-if (resumePlayerId) resumeRoom(resumePlayerId);
-
-function resumeRoom(playerId) {
-  loginMessage.textContent = "正在返回房间...";
-  const protocol = location.protocol === "https:" ? "wss:" : "ws:";
-  socket = new WebSocket(`${protocol}//${location.host}/room-ws?playerId=${encodeURIComponent(playerId)}`);
-  socket.addEventListener("open", () => {
-    heartbeatTimer = setInterval(() => socket.readyState === WebSocket.OPEN && socket.send(JSON.stringify({ type: "heartbeat" })), 10_000);
-  });
-  socket.addEventListener("message", (event) => handleServerMessage(JSON.parse(event.data)));
-  socket.addEventListener("close", () => clearInterval(heartbeatTimer));
 }
 
 function handleServerMessage(message) {
@@ -143,12 +137,18 @@ function renderRoom(nextRoom) {
   containerName.textContent = room.container?.name || "-";
   if (entryFee) entryFee.textContent = formatNumber(room.container?.entryFee || 0);
   playerList.innerHTML = room.players.map(renderPlayerRow).join("");
-  renderSelectors(me);
+  renderSelectors();
   renderInventory(me);
+  renderNotifications();
   renderReadyButton(me);
 }
 
-function renderSelectors(me) {
+function renderNotifications() {
+  document.querySelector("#productionButton .notify-dot")?.toggleAttribute("hidden", !room.notifications?.production);
+  document.querySelector("#lotteryButton .notify-dot")?.toggleAttribute("hidden", !room.notifications?.lottery);
+}
+
+function renderSelectors() {
   const characters = Object.values(room.characters || {});
   if (!selection.characterId && characters[0]) selection.characterId = characters[0].id;
   const selected = room.characters?.[selection.characterId];
@@ -206,12 +206,6 @@ function renderInventory(me) {
   }
 }
 
-function openSidePage(url) {
-  if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: "enter_side_page" }));
-  setTimeout(() => {
-    location.href = url;
-  }, 60);
-}
 function openPropPicker(slot, me) {
   editingSlot = slot;
   const propEntries = Object.entries(me.ownedProps || {}).filter(([, count]) => count > 0);
@@ -234,6 +228,14 @@ function openPropPicker(slot, me) {
     });
   }
   propPicker.showModal();
+}
+
+function openSidePage(url) {
+  if (!myId) return;
+  if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: "enter_side_page" }));
+  setTimeout(() => {
+    location.href = url;
+  }, 60);
 }
 
 function sendSelection() {
@@ -269,7 +271,7 @@ function renderReadyButton(me) {
     return;
   }
   readyButton.textContent = me.ready ? "取消准备" : "准备";
-  readyButton.disabled = false;
+  readyButton.disabled = me.money < 0;
 }
 
 function formatNumber(value) {

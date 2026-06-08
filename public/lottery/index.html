@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>抽奖</title>
+    <link rel="stylesheet" href="/lottery/lottery.css" />
+  </head>
+  <body>
+    <main class="warehouse-page production-mode">
+      <aside class="filters">
+        <div class="side-title">
+          <h1>抽奖</h1>
+          <button id="backButton" type="button">返回</button>
+        </div>
+      </aside>
+      <section class="content">
+        <header class="topbar">
+          <div class="money"><span class="coin">$</span><strong id="moneyValue">0</strong></div>
+        </header>
+        <div id="message" class="message"></div>
+        <div class="lottery-panel" id="lotteryPanel"></div>
+      </section>
+    </main>
+    <script type="module" src="/lottery/lottery.js"></script>
+  </body>
+</html>

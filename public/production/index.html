@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>生产车间</title>
+    <link rel="stylesheet" href="/production/production.css" />
+  </head>
+  <body>
+    <main class="warehouse-page production-mode">
+      <aside class="filters">
+        <div class="side-title">
+          <h1>生产车间</h1>
+          <button id="backButton" type="button">返回</button>
+        </div>
+        <section>
+          <h2>车间页</h2>
+          <select id="pageSelect"></select>
+          <button id="buyPageButton" type="button">购买新车间</button>
+          <p id="pagePrice"></p>
+        </section>
+        <section>
+          <button id="collectAllButton" type="button">一键领取</button>
+          <button id="sellAllOutputsButton" type="button">一键出售</button>
+          <button id="favoriteProductionButton" type="button">一键收藏</button>
+        </section>
+      </aside>
+      <section class="content">
+        <header class="topbar">
+          <div class="money"><span class="coin">$</span><strong id="moneyValue">0</strong></div>
+        </header>
+        <div id="message" class="message"></div>
+        <div class="production-grid" id="productionGrid"></div>
+      </section>
+    </main>
+    <dialog id="recipeDialog" class="recipe-dialog">
+      <form method="dialog"><button value="close" aria-label="关闭">×</button></form>
+      <h2>需求物品</h2>
+      <div id="recipeDetailGrid" class="recipe-detail-grid"></div>
+    </dialog>
+    <div id="outputBubble" class="output-bubble" hidden></div>
+    <script type="module" src="/production/production.js"></script>
+  </body>
+</html>

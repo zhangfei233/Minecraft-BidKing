@@ -1,3 +1,4 @@
 id,name,description,image
 sp_prop1,TNT,选择战利品仓的一个格子，显示该格子及距离其曼哈顿距离为X以内的所有格子的战利品（X为当前回合数）,/resource/props/sp_prop1.png
 sp_prop2,复制机,选择战利品仓中一个完全未知的格子，如果其中有物品，获取该物品的一个复制，结算阶段揭示并获取它，无论是否得拍。,/resource/props/sp_prop2.png
+sp_prop3,新月,选择战利品仓中的一个格子，显示该格子对应的战利品，然后显示该战利品相邻的战利品的轮廓。,/resource/props/sp_prop3.png

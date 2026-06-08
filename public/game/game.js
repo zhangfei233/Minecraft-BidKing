@@ -12,6 +12,8 @@ const propDialog = document.querySelector("#propDialog");
 const propChoices = document.querySelector("#propChoices");
 const settlementPanel = document.querySelector("#settlementPanel");
 const settlementActions = document.querySelector("#settlementActions");
+const topOverlay = document.querySelector("#topOverlay");
+const predictButton = document.querySelector("#predictButton");
 const renderer = new WarehouseCanvas(canvas, { cellSize: 54 });
 
 let socket = null;
@@ -29,24 +31,29 @@ let clientItems = new Map();
 let currentMoney = 0;
 let settlementFinalBid = 0;
 let hasBidThisRound = false;
-let hasUsedPropThisRound = false;
 let propUsesThisRound = 0;
 let maxPropUsesThisRound = 1;
 let pendingTargetUse = null;
 let settlementTimer = null;
 let showRoundResults = false;
 let roundResultTimer = null;
+let predictionAvailable = null;
+let predictionSubmittedThisRound = false;
+let isMakora = false;
+
 const levelRarities = ["gray", "green", "blue", "purple", "gold", "red"];
-const rarityLabels = { gray: "\u767d", green: "\u7eff", blue: "\u84dd", purple: "\u7d2b", gold: "\u91d1", red: "\u7ea2" };
+const rarityLabels = { gray: "白", green: "绿", blue: "蓝", purple: "紫", gold: "金", red: "红" };
 const rarityColors = { red: "#ff6060", gold: "#faff75", purple: "#964aca", blue: "#7b8afc", green: "#95de93", gray: "#c7c7c7" };
 const audioCache = new Map();
 const selectedSettlementRarities = new Set();
 
 for (const [name, ext] of [["click", "mp3"], ["chest", "mp3"], ["orb", "mp3"], ["firework", "mp3"], ["splash", "ogg"]]) preloadSound(name, ext);
+
 document.addEventListener("pointerdown", (event) => {
   if (event.target.closest("button, a")) playSound("click");
 }, true);
 document.addEventListener("warehouse-image-loaded", () => renderer.render());
+
 loadClientItems().then((items) => {
   clientItems = items;
   renderer.setItems(items);
@@ -58,6 +65,10 @@ buildSettlementRarityFilter();
 
 document.querySelector("#useItemButton").addEventListener("click", openPropDialog);
 document.querySelector("#bidButton").addEventListener("click", openBidPanel);
+predictButton?.addEventListener("click", () => {
+  if (!predictionAvailable || hasBidThisRound) return;
+  showMegumiPrediction(predictionAvailable, { closable: true });
+});
 document.querySelector("#sellAllLootButton").addEventListener("click", () => socket?.send(JSON.stringify({ type: "settlement_sell", mode: "all" })));
 document.querySelector("#sellUnfavoriteLootButton").addEventListener("click", () => socket?.send(JSON.stringify({ type: "settlement_sell", mode: "unfavorite" })));
 document.querySelector("#sellRarityLootButton").addEventListener("click", () => {
@@ -104,6 +115,7 @@ function connectGameSocket() {
   const protocol = location.protocol === "https:" ? "wss:" : "ws:";
   socket = new WebSocket(`${protocol}//${location.host}/game-ws?playerId=${encodeURIComponent(myId)}`);
   socket.addEventListener("open", () => {
+    clearInterval(heartbeatTimer);
     heartbeatTimer = setInterval(() => socket.readyState === WebSocket.OPEN && socket.send(JSON.stringify({ type: "heartbeat" })), 10_000);
   });
   socket.addEventListener("close", () => clearInterval(heartbeatTimer));
@@ -116,6 +128,20 @@ function connectGameSocket() {
     if (message.type === "round_start") handleRoundStart(message.body);
     if (message.type === "bid_submitted") handleBidSubmitted(message.body);
     if (message.type === "round_end") handleRoundEnd(message.body);
+    if (message.type === "set_round_timer") handleSetRoundTimer(message.body);
+    if (message.type === "round_pause") handleRoundPause(message.body);
+    if (message.type === "megumi_choice_request") showMegumiChoice(message.body);
+    if (message.type === "megumi_prediction_request") {
+      predictionAvailable = message.body;
+      predictionSubmittedThisRound = false;
+      showMegumiPrediction(message.body, { closable: false });
+      updateActionButtons();
+    }
+    if (message.type === "megumi_prediction_available") {
+      predictionAvailable = message.body;
+      predictionSubmittedThisRound = false;
+      updateActionButtons();
+    }
     if (message.type === "public_state") handlePublicState(message.body);
     if (message.type === "game_over") handleGameOver(message.body);
     if (message.type === "settlement_sell_result") handleSettlementSellResult(message.body);
@@ -131,7 +157,7 @@ function renderInit(data) {
   carriedProps = data.carriedProps || [];
   maxPropUsesThisRound = Number(data.maxPropUses || 1);
   currentMoney = Number(data.money || 0);
-  if (gameMoney) gameMoney.textContent = formatNumber(currentMoney);
+  gameMoney.textContent = formatNumber(currentMoney);
   updateKnownLootValue(renderer.revealedValue());
   currentRound = data.round ?? 1;
   roundNumber.textContent = currentRound;
@@ -153,65 +179,66 @@ function renderPlayers(players) {
     return a.nickname.localeCompare(b.nickname, "zh-CN");
   });
   currentPlayers = sorted;
-  playersEl.innerHTML = sorted
-    .map((player, index) => `
-      <article class="player-card ${player.disconnected ? "is-offline" : ""}">
-        <div class="player-top">
-          ${renderPlayerAvatar(player)}
-          <div>
-            <div class="player-name">${index + 1} ${escapeHtml(player.nickname)}${player.disconnected ? "（掉线）" : ""}</div>
-            <div class="title">${escapeHtml(player.title || "")}</div>
-          </div>
-          <div class="last-bid">${renderBidStatus(player)}</div>
+  const me = sorted.find((player) => player.id === myId);
+  isMakora = Boolean(me?.characterId === "character_21" && me?.characterImageOverride);
+  if (me?.submitted?.[currentRound - 1]) hasBidThisRound = true;
+  updateActionButtons();
+  playersEl.innerHTML = sorted.map((player, index) => `
+    <article class="player-card ${player.disconnected ? "is-offline" : ""}">
+      <div class="player-top">
+        ${renderPlayerAvatar(player)}
+        <div>
+          <div class="player-name">${index + 1} ${escapeHtml(player.nickname)}${player.disconnected ? "（掉线）" : ""}</div>
+          <div class="title">${escapeHtml(player.title || "")}</div>
         </div>
-        <div class="round-items">
-          ${Array.from({ length: 5 }, (_, round) => {
-            const bid = player.roundBids?.[round];
-            const prop = player.usedProps?.[round];
-            const def = prop ? (propDefinitions[prop.id] || {}) : null;
-            const propName = prop ? (def.name || prop.id) : "未使用道具";
-            const title = `${prop ? `${propName} Lv.${def.level || prop.level || 1}` : propName}${bid == null ? "" : `\n准确出价 ${formatNumber(bid)}`}`;
-            return `<div class="round-slot" title="${escapeHtml(title)}"><i style="--prop-bg:${propColor(def)}">${def?.image ? `<img src="${def.image}" alt="" />` : prop ? "道" : ""}</i><span>${round + 1}</span><small>${bid == null ? "" : shortNumber(bid)}</small></div>`;
-          }).join("")}
-        </div>
-      </article>
-    `)
-    .join("");
+        <div class="last-bid">${renderBidStatus(player)}</div>
+      </div>
+      <div class="round-items">
+        ${Array.from({ length: 5 }, (_, round) => {
+          const bid = player.roundBids?.[round];
+          const prop = player.usedProps?.[round];
+          const def = prop ? (propDefinitions[prop.id] || {}) : null;
+          const propName = prop ? (def.name || prop.id) : "未使用道具";
+          const title = `${prop ? `${propName} Lv.${def.level || prop.level || 1}` : propName}${bid == null ? "" : `\n准确出价 ${formatNumber(bid)}`}`;
+          return `<div class="round-slot" title="${escapeHtml(title)}"><i style="--prop-bg:${propColor(def)}">${def?.image ? `<img src="${def.image}" alt="" />` : prop ? "道具" : ""}</i><span>${round + 1}</span><small>${bid == null ? "" : shortNumber(bid)}</small></div>`;
+        }).join("")}
+      </div>
+    </article>
+  `).join("");
 }
 
 function renderBidStatus(player) {
   if (showRoundResults && player.lastBid != null) return formatNumber(player.lastBid);
-  if (player.bidPending) return "\u5df2\u51fa\u4ef7";
+  if (player.bidPending) return "已出价";
   return "";
 }
 
 function renderPlayerAvatar(player) {
   const character = characterDefinitions[player.characterId] || {};
   const description = character.description || character.text || character.skill || "";
-  const image = character.image ? `<img src="${escapeHtml(character.image)}" alt="${escapeHtml(character.name || player.characterId || "")}" />` : "";
+  const imagePath = player.characterImageOverride || character.image;
+  const image = imagePath ? `<img src="${escapeHtml(imagePath)}" alt="${escapeHtml(character.name || player.characterId || "")}" />` : "";
   return `<div class="avatar" title="${escapeHtml(description)}">${image}</div>`;
 }
 
 function openPropDialog() {
   if (hasBidThisRound || propUsesThisRound >= maxPropUsesThisRound) {
-    addNotice({ title: "操作失败", text: hasBidThisRound ? "出价后不能使用道具" : "本回合已经达到道具使用次数上限", show: false, message: [] });
+    addNotice({ title: "操作失败", text: hasBidThisRound ? "出价后不能使用道具" : "本回合已达到道具使用次数上限", show: false, message: [] });
     return;
   }
-  propChoices.innerHTML = carriedProps
-    .map((prop, index) => {
-      if (!prop) return "";
-      const def = propDefinitions[prop.id] || {};
-      const name = def.name || prop.id;
-      const description = def.description || "暂无说明";
-      return `
-        <button class="prop-choice" type="button" data-slot="${index}" title="${escapeHtml(description)}" style="--prop-bg:${propColor(def)}">
-          ${def.image ? `<img src="${def.image}" alt="${escapeHtml(name)}" />` : "<span></span>"}
-          <span><strong>${escapeHtml(name)} Lv.${prop.level || def.level || 1}</strong><span>${escapeHtml(description)}</span>${prop.temporary ? '<em class="temporary-label">临时</em>' : ""}</span>
-          <span>第${index + 1}格</span>
-        </button>
-      `;
-    })
-    .join("") || "<p>没有可用道具</p>";
+  propChoices.innerHTML = carriedProps.map((prop, index) => {
+    if (!prop) return "";
+    const def = propDefinitions[prop.id] || {};
+    const name = def.name || prop.id;
+    const description = def.description || "暂无说明";
+    return `
+      <button class="prop-choice" type="button" data-slot="${index}" title="${escapeHtml(description)}" style="--prop-bg:${propColor(def)}">
+        ${def.image ? `<img src="${def.image}" alt="${escapeHtml(name)}" />` : "<span></span>"}
+        <span><strong>${escapeHtml(name)} Lv.${prop.level || def.level || 1}</strong><span>${escapeHtml(description)}</span>${prop.temporary ? '<em class="temporary-label">临时</em>' : ""}</span>
+        <span>第${index + 1}格</span>
+      </button>
+    `;
+  }).join("") || "<p>没有可用道具</p>";
   for (const button of propChoices.querySelectorAll(".prop-choice")) {
     button.addEventListener("click", () => {
       const slot = Number(button.dataset.slot);
@@ -232,14 +259,14 @@ function openPropDialog() {
   }
   propDialog.showModal();
 }
+
 function handleRoundStart(body) {
   currentRound = body.round;
   hasBidThisRound = false;
-  hasUsedPropThisRound = false;
   propUsesThisRound = 0;
   pendingTargetUse = null;
-  document.querySelector("#bidButton").disabled = false;
-  document.querySelector("#useItemButton").disabled = false;
+  predictionAvailable = null;
+  predictionSubmittedThisRound = false;
   roundNumber.textContent = currentRound;
   showRoundResults = false;
   clearTimeout(roundResultTimer);
@@ -248,6 +275,7 @@ function handleRoundStart(body) {
     player.lastBid = null;
   }
   renderPlayers(currentPlayers);
+  updateActionButtons();
   startCountdown(body.countdownSeconds || 60);
 }
 
@@ -255,10 +283,9 @@ function handleBidSubmitted(body) {
   const player = currentPlayers.find((entry) => entry.id === body.playerId);
   if (body.playerId === myId) {
     hasBidThisRound = true;
-    document.querySelector("#bidButton").disabled = true;
-    document.querySelector("#useItemButton").disabled = true;
     document.querySelector("#bidPanel").hidden = true;
-    propDialog.close();
+    if (propDialog.open) propDialog.close();
+    updateActionButtons();
   }
   if (player) {
     player.bidPending = true;
@@ -269,11 +296,11 @@ function handleBidSubmitted(body) {
 function handleRoundEnd(body) {
   playSound("orb");
   stopCountdown();
+  closeTopOverlay();
   showRoundResults = true;
   clearTimeout(roundResultTimer);
   hasBidThisRound = true;
-  document.querySelector("#bidButton").disabled = true;
-  document.querySelector("#useItemButton").disabled = true;
+  updateActionButtons();
   for (const bid of body.bids || []) {
     const player = currentPlayers.find((entry) => entry.id === bid.playerId);
     if (!player) continue;
@@ -285,10 +312,24 @@ function handleRoundEnd(body) {
     player.usedProps[body.round - 1] = bid.usedProp;
   }
   renderPlayers(currentPlayers);
+  const pauseMs = Math.max(0, Number(body.pauseSeconds || 3) * 1000);
   roundResultTimer = setTimeout(() => {
     showRoundResults = false;
     renderPlayers(currentPlayers);
-  }, 3000);
+  }, pauseMs);
+}
+
+function handleSetRoundTimer(body) {
+  if (Number(body.countdownSeconds) >= 0) startCountdown(Number(body.countdownSeconds));
+}
+
+function handleRoundPause(body) {
+  const seconds = Math.max(0, Number(body.pauseSeconds || 0));
+  stopCountdown();
+  showTimedOverlay(body.animations?.[0]?.text || "回合时间暂停", seconds);
+  setTimeout(() => {
+    if (Number(body.countdownSeconds) >= 0) startCountdown(Number(body.countdownSeconds));
+  }, seconds * 1000);
 }
 
 function handlePublicState(body) {
@@ -303,13 +344,13 @@ function handlePublicState(body) {
 function handleGameOver(body) {
   stopCountdown();
   clearTimeout(settlementTimer);
-  document.querySelector("#bidButton").disabled = true;
-  document.querySelector("#useItemButton").disabled = true;
+  hasBidThisRound = true;
+  updateActionButtons();
   settlementTimer = setTimeout(() => showSettlement(body), 3000);
 }
 
 function showSettlement(body) {
-  document.querySelector("#players").hidden = true;
+  playersEl.hidden = true;
   document.querySelector(".notice-panel").hidden = !(body.copiedItems || []).length;
   document.querySelector(".action-panel").hidden = true;
   settlementPanel.hidden = false;
@@ -325,20 +366,18 @@ function showSettlement(body) {
 }
 
 function handleSettlementSellResult(body) {
-  alert(`本次出售所得金额：${formatNumber(body?.total || 0)}`);
+  alert(`出售获得了 ${formatNumber(body.total || 0)}`);
   socket?.send(JSON.stringify({ type: "return_room" }));
 }
 
 function buildSettlementRarityFilter() {
   const filter = document.querySelector("#settlementRarityFilter");
   if (!filter) return;
-  filter.innerHTML = levelRarities
-    .map((rarity) => `
-      <button class="rarity-diamond" type="button" data-rarity="${rarity}" title="${rarityLabels[rarity]}色品质" style="--rarity-color:${rarityColors[rarity]}">
-        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2 21 12 12 22 3 12Z"></path></svg>
-      </button>
-    `)
-    .join("");
+  filter.innerHTML = levelRarities.map((rarity) => `
+    <button class="rarity-diamond" type="button" data-rarity="${rarity}" title="${rarityLabels[rarity]}色品质" style="--rarity-color:${rarityColors[rarity]}">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2 21 12 12 22 3 12Z"></path></svg>
+    </button>
+  `).join("");
   for (const button of filter.querySelectorAll(".rarity-diamond")) {
     button.addEventListener("click", () => {
       const rarity = button.dataset.rarity;
@@ -373,11 +412,7 @@ function renderSettlementInfo(body) {
       <span>${escapeHtml(character.name || winner.characterId || "")}</span>
     </div>
   `;
-  if (winner.id === myId) {
-    sellActions.hidden = false;
-  } else {
-    sellActions.hidden = true;
-  }
+  sellActions.hidden = winner.id !== myId;
 }
 
 function renderCopiedItems(copiedItems) {
@@ -396,7 +431,7 @@ function renderCopiedItems(copiedItems) {
       <div class="notice-icon"><img src="/resource/system_message.png" alt="" /></div>
       <div>
         <strong>${escapeHtml(nickname)}复制了以下物品：</strong>
-        <span>总价值：${formatNumber(totalValue)}</span>
+        <span>总价值 ${formatNumber(totalValue)}</span>
         <div class="copied-loot-grid">
           ${items.map((item) => `
             <div class="copied-loot-card" style="--rarity-color:${rarityColors[item.rarity] || rarityColors.gray}">
@@ -427,7 +462,7 @@ function renderExtraRewards(rewards) {
 
 function revealDividend(body) {
   const dividendEl = document.querySelector("#dividendText");
-  dividendEl.textContent = body.dividend > 0 ? `\u672c\u5c40\u83b7\u5f97\u5206\u7ea2 ${formatNumber(body.dividend || 0)}` : "";
+  dividendEl.textContent = body.dividend > 0 ? `本局获得分红 ${formatNumber(body.dividend || 0)}` : "";
   settlementActions.hidden = false;
 }
 
@@ -442,7 +477,7 @@ function updateSettlementValues(value) {
 }
 
 function updateKnownLootValue(value) {
-  if (knownLootValue) knownLootValue.textContent = formatNumber(Math.max(0, Number(value || 0)));
+  knownLootValue.textContent = formatNumber(Math.max(0, Number(value || 0)));
 }
 
 function addNotice(entry) {
@@ -463,6 +498,88 @@ function handleHint(entry) {
   addNotice(entry);
 }
 
+function showTimedOverlay(text, seconds) {
+  if (!topOverlay) return;
+  topOverlay.innerHTML = `<div class="overlay-card"><strong>${escapeHtml(text)}</strong><span>${formatNumber(seconds)} 秒</span></div>`;
+  topOverlay.hidden = false;
+  setTimeout(closeTopOverlay, Math.max(0, seconds) * 1000);
+}
+
+function showMegumiChoice(body) {
+  if (!topOverlay) return;
+  topOverlay.hidden = false;
+  const canChooseDomain = body.canChooseDomain !== false;
+  topOverlay.innerHTML = `
+    <div class="overlay-card choice-card">
+      <strong>Megumi 抉择</strong>
+      <span>${escapeHtml(body.text || "请选择本局技能路线。")}</span>
+      <div class="overlay-actions">
+        <button type="button" data-choice="domain" ${canChooseDomain ? "" : "disabled"} title="${canChooseDomain ? "" : "本局玩家少于3人，不能选择领域展开"}">领域展开</button>
+        <button type="button" data-choice="makora">跟你爆了</button>
+      </div>
+    </div>
+  `;
+  topOverlay.querySelectorAll("[data-choice]").forEach((button) => {
+    button.addEventListener("click", () => {
+      if (button.disabled) return;
+      socket?.send(JSON.stringify({ type: "megumi_choice", choice: button.dataset.choice }));
+      closeTopOverlay();
+    });
+  });
+}
+
+function showMegumiPrediction(body, { closable = true } = {}) {
+  if (!topOverlay) return;
+  const predictions = {};
+  const rows = body.players || [];
+  for (const player of rows) predictions[player.id] = "equal";
+  topOverlay.hidden = false;
+  topOverlay.innerHTML = `
+    <div class="overlay-card prediction-card">
+      <strong>Makora 出价预测</strong>
+      ${closable ? '<button class="overlay-close" type="button" aria-label="关闭">×</button>' : ""}
+      <table>
+        <thead><tr><th>玩家昵称</th><th>上回合出价</th><th>你的预测</th></tr></thead>
+        <tbody>
+          ${rows.map((player) => `
+            <tr data-player="${escapeHtml(player.id)}">
+              <td>${escapeHtml(player.nickname)}</td>
+              <td>${formatNumber(player.lastBid || 0)}</td>
+              <td>
+                <button type="button" data-pick="up">↑</button>
+                <button class="selected" type="button" data-pick="equal">=</button>
+                <button type="button" data-pick="down">↓</button>
+              </td>
+            </tr>
+          `).join("")}
+        </tbody>
+      </table>
+      <button type="button" id="submitPredictionButton">提交</button>
+    </div>
+  `;
+  topOverlay.querySelector(".overlay-close")?.addEventListener("click", closeTopOverlay);
+  topOverlay.querySelectorAll("tr[data-player]").forEach((row) => {
+    row.querySelectorAll("[data-pick]").forEach((button) => {
+      button.addEventListener("click", () => {
+        predictions[row.dataset.player] = button.dataset.pick;
+        row.querySelectorAll("[data-pick]").forEach((entry) => entry.classList.toggle("selected", entry === button));
+      });
+    });
+  });
+  topOverlay.querySelector("#submitPredictionButton")?.addEventListener("click", () => {
+    socket?.send(JSON.stringify({ type: "megumi_prediction", predictions }));
+    predictionSubmittedThisRound = true;
+    updateActionButtons();
+    closeTopOverlay();
+  });
+}
+
+function closeTopOverlay() {
+  if (!topOverlay) return;
+  topOverlay.hidden = true;
+  topOverlay.innerHTML = "";
+}
+
 function startCountdown(seconds) {
   stopCountdown();
   remainingSeconds = seconds;
@@ -473,7 +590,7 @@ function startCountdown(seconds) {
     if (remainingSeconds <= 0) {
       stopCountdown();
       if (pendingTargetUse) completeTargetUse({ x: 0, y: 0 });
-      sendBid(0);
+      sendBid(0, { skipPredictionConfirm: true });
     }
   }, 1000);
 }
@@ -487,14 +604,12 @@ function handlePropSlots(body) {
   carriedProps = body.props || carriedProps;
   propUsesThisRound = Number(body.uses || 0);
   maxPropUsesThisRound = Number(body.maxUses || maxPropUsesThisRound || 1);
-  hasUsedPropThisRound = propUsesThisRound >= maxPropUsesThisRound;
-  document.querySelector("#useItemButton").disabled = hasBidThisRound || hasUsedPropThisRound;
+  updateActionButtons();
 }
 
 function sendUseProp(slot, target = null) {
   propUsesThisRound += 1;
-  hasUsedPropThisRound = propUsesThisRound >= maxPropUsesThisRound;
-  document.querySelector("#useItemButton").disabled = hasUsedPropThisRound;
+  updateActionButtons();
   socket?.send(JSON.stringify({ type: "use_prop", slot, target }));
 }
 
@@ -506,24 +621,35 @@ function completeTargetUse(cell) {
 }
 
 function requiresTarget(id) {
-  return id === "sp_prop1" || id === "sp_prop2";
+  return id === "sp_prop1" || id === "sp_prop2" || id === "sp_prop3";
 }
 
 function updateTimer() {
   document.querySelector("#timer").textContent = Math.max(0, remainingSeconds);
 }
 
-function sendBid(amount) {
-  const value = Math.max(0, Math.floor(Number(amount) || 0));
-  if (value > currentMoney) {
-    addNotice({ title: "出价失败", text: "出价不能超过当前金钱", show: false, message: [] });
-    return;
+function sendBid(amount, { skipPredictionConfirm = false } = {}) {
+  if (hasBidThisRound) return;
+  if (isMakora && predictionAvailable && !predictionSubmittedThisRound && !skipPredictionConfirm) {
+    const ok = confirm("你还没有提交本回合预测。不发动预测将使用默认预测结果，确定继续出价吗？");
+    if (!ok) return;
   }
+  const value = Math.max(0, Math.floor(Number(amount) || 0));
   hasBidThisRound = true;
-  document.querySelector("#bidButton").disabled = true;
-  document.querySelector("#useItemButton").disabled = true;
-  propDialog.close();
+  updateActionButtons();
+  if (propDialog.open) propDialog.close();
   socket?.send(JSON.stringify({ type: "bid", amount: value }));
+}
+
+function updateActionButtons() {
+  const useButton = document.querySelector("#useItemButton");
+  const bidButton = document.querySelector("#bidButton");
+  if (bidButton) bidButton.disabled = hasBidThisRound;
+  if (useButton) useButton.disabled = hasBidThisRound || propUsesThisRound >= maxPropUsesThisRound;
+  if (predictButton) {
+    predictButton.hidden = !(isMakora && predictionAvailable);
+    predictButton.disabled = hasBidThisRound || !predictionAvailable || predictionSubmittedThisRound;
+  }
 }
 
 function preloadSound(name, ext = "mp3") {
@@ -557,7 +683,7 @@ function setupBidPanel() {
   });
   document.querySelector("#confirmBidButton").addEventListener("click", () => {
     sendBid(Number(bidInput || 0));
-    panel.hidden = true;
+    if (hasBidThisRound) panel.hidden = true;
   });
   document.querySelector("#closeBidButton").addEventListener("click", () => {
     panel.hidden = true;
@@ -566,9 +692,8 @@ function setupBidPanel() {
 
 function openBidPanel() {
   if (hasBidThisRound) return;
-  const panel = document.querySelector("#bidPanel");
   bidInput = "";
-  panel.hidden = false;
+  document.querySelector("#bidPanel").hidden = false;
   updateBidPanel();
 }
 
@@ -579,7 +704,7 @@ function updateBidPanel() {
   const value = Number(bidInput || 0);
   document.querySelector("#bidNumber").textContent = formatNumber(value);
   document.querySelector("#bidCn").textContent = chineseUnit(value);
-  document.querySelector("#confirmBidButton").disabled = value > currentMoney;
+  document.querySelector("#confirmBidButton").disabled = false;
 }
 
 function currentWinRatio() {

@@ -18,12 +18,15 @@
       <section class="action-panel">
         <div class="timer" id="timer">60</div>
         <button type="button" id="useItemButton">使用道具</button>
+        <button type="button" id="predictButton" title="Makora 出价预测" hidden>
+          <img src="/resource/wheel.png" alt="" />
+        </button>
         <button type="button" id="bidButton">出价</button>
       </section>
 
       <aside class="warehouse-panel">
         <div class="warehouse-head">
-          <h1>大型箱子</h1>
+          <h1>战利品仓</h1>
           <div class="warehouse-meta">
             <span>当前金钱 <strong id="gameMoney">0</strong></span>
             <span>已知总价值 <strong id="knownLootValue">0</strong></span>
@@ -85,7 +88,7 @@
         <button data-key="0">0</button><button data-key="00">00</button><button data-key="000">000</button><button data-action="clear">归零</button>
       </div>
       <div class="bid-display">
-        <p id="ratioHint">注意: 当前出价若高于第二名出价2倍则直接成交</p>
+        <p id="ratioHint">注意：当前出价若高于第二名出价2倍则直接成交</p>
         <div class="bid-number" id="bidNumber">0</div>
         <div class="bid-cn" id="bidCn">0</div>
         <button id="confirmBidButton" type="button">确认出价</button>
@@ -93,6 +96,7 @@
       </div>
     </section>
 
+    <div id="topOverlay" class="top-overlay" hidden></div>
     <script type="module" src="/game/game.js"></script>
   </body>
 </html>
