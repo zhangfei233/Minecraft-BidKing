@@ -8,6 +8,7 @@ export class AdvantageTracker {
   }
 
   add(sourceId, targetId, amount) {
+    if (!sourceId || !targetId || sourceId === targetId) return 0;
     const key = this.key(sourceId, targetId);
     const next = (this.values.get(key) || 0) + Number(amount || 0);
     this.values.set(key, next);
@@ -15,6 +16,7 @@ export class AdvantageTracker {
   }
 
   get(sourceId, targetId) {
+    if (!sourceId || !targetId || sourceId === targetId) return 0;
     return this.values.get(this.key(sourceId, targetId)) || 0;
   }
 
@@ -22,7 +24,7 @@ export class AdvantageTracker {
     return [...this.values.entries()].map(([key, value]) => {
       const [sourceId, targetId] = key.split("=>");
       return { sourceId, targetId, value };
-    });
+    }).filter((entry) => entry.sourceId !== entry.targetId && Number(entry.value) > 0);
   }
 }
 

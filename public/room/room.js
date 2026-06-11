@@ -50,6 +50,9 @@ document.querySelector("#warehouseButton").addEventListener("click", () => openS
 document.querySelector("#shopButton").addEventListener("click", () => openSidePage(`/shop?playerId=${encodeURIComponent(myId)}`));
 document.querySelector("#productionButton")?.addEventListener("click", () => openSidePage(`/production?playerId=${encodeURIComponent(myId)}`));
 document.querySelector("#lotteryButton")?.addEventListener("click", () => openSidePage(`/lottery?playerId=${encodeURIComponent(myId)}`));
+document.querySelector("#instructionButton")?.addEventListener("click", () => window.open("/instruction", "_blank", "noopener,noreferrer"));
+document.querySelector("#achievementButton")?.addEventListener("click", () => openSidePage(`/achievement?playerId=${encodeURIComponent(myId)}`));
+document.querySelector("#wikiButton")?.addEventListener("click", () => window.open("/wiki", "_blank", "noopener,noreferrer"));
 document.querySelector("#saveLoadoutButton").addEventListener("click", () => socket?.send(JSON.stringify({ type: "save_loadout", props: selection.props })));
 document.querySelector("#useLoadoutButton").addEventListener("click", () => socket?.send(JSON.stringify({ type: "use_loadout" })));
 document.querySelector("#changeCharacterButton").addEventListener("click", () => {

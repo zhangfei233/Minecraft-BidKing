@@ -1,0 +1,78 @@
+:root {
+  color-scheme: dark;
+  --page: #14181b;
+  --panel: #20282d;
+  --line: rgba(232, 240, 244, 0.18);
+  --text: #f0f4f6;
+  --muted: #aab5bb;
+  --accent: #f0c65a;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background: linear-gradient(180deg, #101316, var(--page));
+  color: var(--text);
+  font-family: "Microsoft YaHei", "PingFang SC", system-ui, sans-serif;
+}
+
+.instruction-page {
+  min-height: 100vh;
+  display: grid;
+  grid-template-columns: 280px minmax(0, 1fr);
+}
+
+.instruction-nav {
+  border-right: 1px solid var(--line);
+  background: rgba(20, 27, 31, 0.92);
+  padding: 28px 22px;
+}
+
+.instruction-nav h1 {
+  margin: 0 0 22px;
+  font-size: 28px;
+}
+
+.instruction-nav ul {
+  margin: 0;
+  padding: 0 0 0 20px;
+  display: grid;
+  gap: 10px;
+}
+
+.instruction-nav button {
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+
+.instruction-nav button.is-active {
+  color: var(--accent);
+  font-weight: 800;
+}
+
+.instruction-content {
+  padding: 44px 56px;
+  overflow: auto;
+}
+
+.instruction-content h2 {
+  margin: 0 0 18px;
+  font-size: 32px;
+}
+
+.instruction-content p {
+  max-width: 980px;
+  margin: 0;
+  white-space: pre-wrap;
+  line-height: 1.85;
+  color: #d9e2e6;
+  font-size: 18px;
+}

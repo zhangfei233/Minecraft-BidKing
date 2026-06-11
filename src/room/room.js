@@ -19,6 +19,7 @@ import {
 } from "../player/profile.js";
 import { acceptWebSocket, decodeWsText, sendWsJson } from "../net/websocket.js";
 import { PRODUCTION_MAX_PAGES, loadProductionRecipes, normalizeProductionState } from "../production/production.js";
+import { loadAchievements, normalizeAchievementState, publicAchievementState } from "../achievement/achievement.js";
 
 const MAX_PLAYERS = 4;
 const HEARTBEAT_TIMEOUT_MS = 20_000;
@@ -31,6 +32,7 @@ export function createRoom({ rootDir, onGameStart }) {
   const itemsById = loadItemsById(rootDir);
   const productionRecipes = loadProductionRecipes(rootDir, itemsById);
   const lotteryRecipes = loadLotteryRecipes(loadLotteryRaw(rootDir), itemsById, propDefinitions);
+  const achievements = loadAchievements(rootDir);
   const maxPlayers = loadMaxPlayers(rootDir);
   const containers = loadContainers(rootDir);
   let currentContainer = pickContainer(containers);
@@ -75,6 +77,8 @@ export function createRoom({ rootDir, onGameStart }) {
     if (players.size >= maxPlayers) return reject(socket, "房间已满");
 
     const profile = ensureProfile(rootDir, nickname);
+    normalizeAchievementState(profile, achievements);
+    saveProfileByNickname(rootDir, profile);
     const player = {
       id: createPlayerId(),
       nickname,
@@ -176,6 +180,15 @@ export function createRoom({ rootDir, onGameStart }) {
     const player = resolvePlayerForSideConnection(requestUrl.searchParams.get("playerId"), socket);
     if (!player) return rejectWs(socket, "只有房间内玩家可以访问仓库");
     attachSideSocket(player, socket, () => sendLotteryState(player, socket), (buffer) => handleLotteryMessage(player, socket, buffer));
+    return true;
+  }
+
+  function handleAchievementUpgrade(req, socket, requestUrl) {
+    if (requestUrl.pathname !== "/achievement-ws") return false;
+    if (!acceptWebSocket(req, socket)) return true;
+    const player = resolvePlayerForSideConnection(requestUrl.searchParams.get("playerId"), socket);
+    if (!player) return rejectWs(socket, "只有房间内玩家可以访问成就");
+    attachSideSocket(player, socket, () => sendAchievementState(player, socket), (buffer) => handleAchievementMessage(player, socket, buffer));
     return true;
   }
 
@@ -576,6 +589,46 @@ export function createRoom({ rootDir, onGameStart }) {
     });
   }
 
+  function sendAchievementState(player, socket) {
+    normalizeAchievementState(player.profile, achievements);
+    sendWsJson(socket, {
+      type: "achievement_state",
+      body: {
+        money: player.profile.money,
+        achievements: publicAchievementState(player.profile, achievements),
+        items: Object.fromEntries([...itemsById].map(([id, item]) => [id, { id, name: item.name, rarity: item.rarity, price: item.price }])),
+      },
+    });
+  }
+
+  function handleAchievementMessage(player, socket, buffer) {
+    const message = readJson(buffer);
+    if (!message) return sendWsJson(socket, { type: "error", message: "消息格式错误" });
+    try {
+      if (message.type === "claim_achievement") {
+        const result = claimAchievementReward(player, message.id);
+        saveProfileByNickname(rootDir, player.profile);
+        sendWsJson(socket, { type: "achievement_claimed", body: result });
+        sendAchievementState(player, socket);
+      }
+    } catch (err) {
+      sendWsJson(socket, { type: "error", message: err.message || "成就操作失败" });
+    }
+  }
+
+  function claimAchievementReward(player, id) {
+    normalizeAchievementState(player.profile, achievements);
+    const achievement = achievements.find((entry) => String(entry.id) === String(id));
+    if (!achievement) throw new Error("未知成就");
+    const state = player.profile.achievements[String(achievement.id)];
+    if (!state.completed) throw new Error("成就尚未完成");
+    if (state.claimed) throw new Error("奖励已经领取");
+    if (!achievement.reward || !itemsById.has(Number(achievement.reward))) throw new Error("成就奖励无效");
+    addProfileItem(player.profile, Number(achievement.reward), 1);
+    state.claimed = true;
+    return { id: achievement.id, reward: achievement.reward, rewardName: itemsById.get(Number(achievement.reward))?.name || `#${achievement.reward}` };
+  }
+
   function setProductionRecipe(player, slotIndex, recipeId, pageNumber = null) {
     const slot = getProductionSlot(player, slotIndex, pageNumber);
     if (slot.outputs.some(Boolean)) throw new Error("\u8bf7\u5148\u5904\u7406\u4ea7\u7269\u683c\u4e2d\u7684\u7269\u54c1");
@@ -824,6 +877,7 @@ export function createRoom({ rootDir, onGameStart }) {
     handleShopUpgrade,
     handleProductionUpgrade,
     handleLotteryUpgrade,
+    handleAchievementUpgrade,
     completeGame,
     listPlayers,
     findPlayer,

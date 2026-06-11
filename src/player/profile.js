@@ -198,6 +198,7 @@ function createProfile(nickname) {
       propLoadout: [null, null, null, null, null],
       warehouseNotifications: { production: false, lottery: false },
     },
+    achievements: {},
   };
 }
 
@@ -209,6 +210,7 @@ function normalizeProfile(profile, nickname) {
   if (!profile.warehouse.props || typeof profile.warehouse.props !== "object") profile.warehouse.props = {};
   profile.production = normalizeProductionState(profile.production);
   profile.lottery = normalizeLotteryState(profile.lottery);
+  if (!profile.achievements || typeof profile.achievements !== "object") profile.achievements = {};
   if (!profile.settings || typeof profile.settings !== "object") profile.settings = {};
   if (!Array.isArray(profile.settings.propLoadout)) profile.settings.propLoadout = [null, null, null, null, null];
   if (!profile.settings.warehouseNotifications || typeof profile.settings.warehouseNotifications !== "object") {

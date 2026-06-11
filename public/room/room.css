@@ -78,6 +78,7 @@ input {
 
 .login-panel button,
 .nav-buttons button,
+.top-actions button,
 .character-card button,
 .ready-button {
   border: 1px solid rgba(255, 255, 255, 0.22);
@@ -111,7 +112,7 @@ input {
 .room-top {
   grid-column: 1 / -1;
   display: grid;
-  grid-template-columns: 280px 1fr 260px;
+  grid-template-columns: 280px 1fr 300px;
   align-items: center;
   gap: 20px;
 }
@@ -128,16 +129,30 @@ input {
   font-weight: 800;
 }
 
+.top-actions {
+  display: grid;
+  grid-template-columns: 58px minmax(0, 1fr);
+  gap: 8px;
+  align-items: center;
+}
+
+.top-actions button {
+  height: 60px;
+  font-weight: 800;
+}
+
 .money-box {
   display: flex;
   align-items: center;
   justify-content: space-between;
   height: 60px;
-  padding: 0 18px;
+  padding: 0 14px;
   border: 1px solid var(--line);
   border-radius: 6px;
   background: rgba(23, 29, 33, 0.82);
   font-size: 18px;
+  white-space: nowrap;
+  min-width: 0;
 }
 
 .money-box strong {
@@ -153,14 +168,14 @@ input {
 
 .nav-buttons {
   display: grid;
-  grid-template-columns: repeat(2, 96px);
-  gap: 14px;
+  grid-template-columns: repeat(3, 76px);
+  gap: 10px;
   margin-bottom: 24px;
 }
 
 .nav-buttons button {
   position: relative;
-  width: 96px;
+  width: 76px;
   height: 42px;
   font-weight: 800;
 }

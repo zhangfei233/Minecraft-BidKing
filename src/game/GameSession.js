@@ -19,6 +19,7 @@ import { error as logError, info as logInfo } from "../net/logger.js";
 import { loadProductionRecipes, runProduction } from "../production/production.js";
 import { loadLotteryRecipes, lotteryConsumableIds } from "../lottery/lottery.js";
 import { AdvantageTracker, requiredPairRatio } from "./advantage.js";
+import { advanceAchievement, loadAchievements, normalizeAchievementState } from "../achievement/achievement.js";
 
 const ROUND_COUNT = 5;
 const ROUND_MS = 62_000;
@@ -58,6 +59,7 @@ export class GameSession {
     this.productionRecipes = loadProductionRecipes(rootDir, this.itemsById);
     this.lotteryRecipes = loadLotteryRecipes(loadLotteryRaw(rootDir), this.itemsById, this.propDefinitions);
     this.lotteryConsumableIds = lotteryConsumableIds(this.lotteryRecipes).map(Number);
+    this.achievements = loadAchievements(rootDir);
     const gameConfig = loadConfig(rootDir).game || {};
     this.systemHintProbability = Number(gameConfig.system_hint_probability ?? 0.3);
     this.dividendRatio = Number(gameConfig.dividend_ratio ?? 0.1);
@@ -90,6 +92,7 @@ export class GameSession {
       pendingExclusiveProps: [],
       copiedItems: [],
     }));
+    for (const player of this.players) normalizeAchievementState(player.profile, this.achievements);
     this.playersById = new Map(this.players.map((player) => [player.id, player]));
     this.settlementOpen = false;
     this.roomCompleted = false;
@@ -107,6 +110,7 @@ export class GameSession {
     this.started = false;
     this.finished = false;
     this.advantages = new AdvantageTracker();
+    this.roundFiveDomainClash = null;
     this.reserveCarriedProps();
     this.initializeNewCharacterStates();
     this.heartbeatTimer = setInterval(() => this.checkHeartbeats(), 15_000);
@@ -669,6 +673,7 @@ export class GameSession {
     }
 
     player.characterState.reinerTransformed = true;
+    player.characterState.reinerTransformRound = this.round;
     player.characterState.reinerChairCount = Number(player.characterState.reinerChairCount || 0);
     const largeEntries = realItemEntries(this.warehouse).filter(({ item }) => itemCells(item) > 9);
     const highestValue = largeEntries.reduce((best, entry) => {
@@ -751,6 +756,12 @@ export class GameSession {
     if (!activeDomains.length) return;
     const gojoCount = activeDomains.filter((domain) => domain.type === "gojo").length;
     const sukunaCount = activeDomains.filter((domain) => domain.type === "sukuna").length;
+    if (gojoCount > 0 && sukunaCount > 0) {
+      this.roundFiveDomainClash = {
+        gojoIds: activeDomains.filter((domain) => domain.type === "gojo").map((domain) => domain.source.id),
+        sukunaIds: activeDomains.filter((domain) => domain.type === "sukuna").map((domain) => domain.source.id),
+      };
+    }
     if (gojoCount > 0 && sukunaCount > 0) {
       this.roundStartAnimations = [{ id: 10, durationSeconds: ANIMATION_SECONDS[10] }];
     } else if (gojoCount > 0) {
@@ -1106,15 +1117,24 @@ export class GameSession {
     const winner = winnerId ? this.players.find((player) => player.id === winnerId) : null;
     const chairReplacement = winner ? this.createChairReplacement(winner, warehouseItems) : null;
     const actualWarehouseItems = chairReplacement?.warehouseItems || warehouseItems;
-    const totalValue = actualWarehouseItems.reduce((sum, item) => sum + Number(item.price || 0), 0);
+    const publicTotalValue = warehouseItems.reduce((sum, item) => sum + Number(item.price || 0), 0);
+    const actualTotalValue = actualWarehouseItems.reduce((sum, item) => sum + Number(item.price || 0), 0);
     this.lastWinnerId = winner?.id || null;
     const finalBid = winner ? lastBidFor(winner) : 0;
     this.logFinalBidModifiers(this.round - 1);
-    const finalProfit = winner ? totalValue - finalBid : 0;
+    const finalProfit = winner ? actualTotalValue - finalBid : 0;
     const dividend = winner && finalProfit < 0 ? Math.ceil(Math.abs(finalProfit) * Math.max(0, this.dividendRatio)) : 0;
     this.wonItemCounts = winner ? countItems(actualWarehouseItems) : {};
     const extraRewardsByPlayer = new Map(this.players.map((player) => [player.id, []]));
     const lotteryCountsBefore = new Map(this.players.map((player) => [player.id, lotteryItemCount(player.profile, this.lotteryConsumableIds)]));
+    this.applyFinishAchievements({
+      winner,
+      winnerId,
+      finalBid,
+      finalProfit,
+      chairReplacement,
+      roundIndex: this.round - 1,
+    });
 
     for (const player of this.players) {
       for (let index = 0; index < player.props.length; index += 1) {
@@ -1157,7 +1177,9 @@ export class GameSession {
       type: "game_over",
       body: {
         winnerId,
-        totalValue,
+        totalValue: publicTotalValue,
+        actualTotalValue,
+        actualProfit: finalProfit,
         finalBid,
         dividend,
         warehouseItems,
@@ -1174,6 +1196,78 @@ export class GameSession {
         extraRewardsByPlayer: Object.fromEntries(extraRewardsByPlayer),
       },
     });
+  }
+
+  applyFinishAchievements({ winner, winnerId, finalBid, finalProfit, chairReplacement, roundIndex }) {
+    if (!this.achievements.length) return;
+    for (const player of this.players) normalizeAchievementState(player.profile, this.achievements);
+    const winnerIsSukunaDomain = Boolean(winnerId && this.roundFiveDomainClash?.sukunaIds?.includes(winnerId));
+    const winnerIsGojoDomain = Boolean(winnerId && this.roundFiveDomainClash?.gojoIds?.includes(winnerId));
+    const hasDomainClash = Boolean(this.roundFiveDomainClash?.gojoIds?.length && this.roundFiveDomainClash?.sukunaIds?.length);
+
+    for (const player of this.players) {
+      if (winner && player.id === winner.id && this.round === 1 && finalProfit > 0) this.awardAchievement(player, "1");
+      if (this.playerKnowsAllItems(player)) this.awardAchievement(player, "2");
+      if (winner && player.id === winner.id && this.isMinusOneLoss(winner, roundIndex)) this.awardAchievement(player, "3");
+      if (winner && player.id === winner.id && this.isMultiplierRequired(winner, roundIndex)) this.awardAchievement(player, "4");
+
+      if (hasDomainClash && player.characterId === "character_15") {
+        if (winnerIsSukunaDomain) this.awardAchievement(player, "5");
+        if (player.id === winnerId) this.awardAchievement(player, "6");
+        if (winnerIsGojoDomain) this.awardAchievement(player, "7");
+      }
+      if (hasDomainClash && player.characterId === "character_14" && player.id === winnerId) this.awardAchievement(player, "8");
+
+      if (
+        winner
+        && player.id === winner.id
+        && player.characterId === "character_22"
+        && player.characterState.reinerTransformed
+        && Number(player.characterState.reinerTransformRound) === this.round
+        && finalProfit > 0
+      ) {
+        this.awardAchievement(player, "9");
+      }
+      if (
+        winner
+        && player.id === winner.id
+        && player.characterId === "character_22"
+        && player.characterState.reinerTransformed
+        && (chairReplacement?.replacedItems?.length || 0) > 5
+      ) {
+        this.awardAchievement(player, "10");
+      }
+    }
+  }
+
+  awardAchievement(player, id, amount = 1) {
+    advanceAchievement(player.profile, this.achievements, id, amount);
+  }
+
+  playerKnowsAllItems(player) {
+    const view = this.warehouse.getView(player.gameIndex);
+    return realItemEntries(this.warehouse).every(({ index }) => itemIndexFullKnown(view, index));
+  }
+
+  isMinusOneLoss(winner, roundIndex) {
+    if (!winner || (winner.bids[roundIndex] || 0) <= 0) return false;
+    winner.bids[roundIndex] -= 1;
+    try {
+      return this.evaluateWinner(roundIndex).winnerId !== winner.id;
+    } finally {
+      winner.bids[roundIndex] += 1;
+    }
+  }
+
+  isMultiplierRequired(winner, roundIndex) {
+    if (!winner) return false;
+    const actualWinner = this.evaluateWinner(roundIndex).winnerId;
+    if (actualWinner !== winner.id) return false;
+    const rawWinner = this.evaluateWinnerFromBids(roundIndex, this.players.map((player) => ({
+      player,
+      bid: player.bids[roundIndex] || 0,
+    }))).winnerId;
+    return rawWinner !== winner.id;
   }
 
   createChairReplacement(winner, publicWarehouseItems) {
@@ -1439,17 +1533,31 @@ export class GameSession {
       rawBid: player.bids[roundIndex] || 0,
       bid: Math.ceil((player.bids[roundIndex] || 0) * this.bidMultiplierFor(player, roundIndex)),
     }));
+    return this.evaluateWinnerFromBids(roundIndex, bids);
+  }
+
+  evaluateWinnerFromBids(roundIndex, bids) {
     bids.sort((a, b) => b.bid - a.bid);
     const ratio = WIN_RATIOS[roundIndex];
-    const winners = bids.filter((candidate) => candidate.bid > 0 && bids.every((opponent) => {
-      if (opponent.player.id === candidate.player.id) return true;
-      const candidateAdvantage = this.advantages.get(candidate.player.id, opponent.player.id);
-      const opponentAdvantage = this.advantages.get(opponent.player.id, candidate.player.id);
-      const required = requiredPairRatio(ratio, candidateAdvantage, opponentAdvantage);
-      return candidate.bid > opponent.bid * required;
-    }));
-    if (winners.length !== 1) return { finished: roundIndex === ROUND_COUNT - 1, winnerId: null };
-    return { finished: true, winnerId: winners[0].player.id };
+    const distinctBids = [...new Set(bids.map((entry) => entry.bid).filter((bid) => bid > 0))].sort((a, b) => b - a);
+    const secondBid = distinctBids.length > 1 ? distinctBids[1] : 0;
+    const secondPlaceOpponents = bids.filter((entry) => entry.bid === secondBid);
+    const winners = bids.filter((candidate) => {
+      if (candidate.bid <= 0) return false;
+      if (!secondPlaceOpponents.length) return true;
+      return secondPlaceOpponents.every((opponent) => {
+        if (opponent.player.id === candidate.player.id) return false;
+        const candidateAdvantage = this.advantages.get(candidate.player.id, opponent.player.id);
+        const opponentAdvantage = this.advantages.get(opponent.player.id, candidate.player.id);
+        const required = requiredPairRatio(ratio, candidateAdvantage, opponentAdvantage);
+        return candidate.bid > opponent.bid * required;
+      });
+    }).sort((a, b) => b.bid - a.bid);
+    if (!winners.length) return { finished: roundIndex === ROUND_COUNT - 1, winnerId: null };
+    const highestWinnerBid = winners[0].bid;
+    const tiedWinners = winners.filter((entry) => entry.bid === highestWinnerBid);
+    if (tiedWinners.length !== 1) return { finished: roundIndex === ROUND_COUNT - 1, winnerId: null };
+    return { finished: true, winnerId: tiedWinners[0].player.id };
   }
 
   bidMultiplierFor(player, roundIndex) {
@@ -1711,6 +1819,10 @@ function sample(items, count, random) {
 
 function realItemEntries(warehouse) {
   return warehouse.items.map((item, index) => ({ item, index })).filter(({ item, index }) => index > 0 && item?.id !== 0);
+}
+
+function itemIndexFullKnown(view, itemIndex) {
+  return (view.hint || []).some((hint) => hint.type === "item_full" && Number(hint.itemIndex) === Number(itemIndex));
 }
 
 function itemCells(item) {

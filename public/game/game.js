@@ -502,7 +502,6 @@ function renderChairReplacement(chairReplacement) {
     </div>
   `;
   noticeList.appendChild(el);
-  updateSettlementValues(renderer.revealedValue() + Number(chairReplacement.delta || 0));
 }
 
 function copiedLootCard(item) {

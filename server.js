@@ -59,6 +59,8 @@ const server = http.createServer((req, res) => {
     if (requestUrl.pathname === "/shop") return sendFile(res, path.join(PUBLIC_DIR, "shop", "index.html"));
     if (requestUrl.pathname === "/production") return sendFile(res, path.join(PUBLIC_DIR, "production", "index.html"));
     if (requestUrl.pathname === "/lottery") return sendFile(res, path.join(PUBLIC_DIR, "lottery", "index.html"));
+    if (requestUrl.pathname === "/instruction") return sendFile(res, path.join(PUBLIC_DIR, "instruction", "index.html"));
+    if (requestUrl.pathname === "/achievement") return sendFile(res, path.join(PUBLIC_DIR, "achievement", "index.html"));
 
     if (requestUrl.pathname === "/api/test_warehouse") {
       const warehouse = new Warehouse({ rootDir: ROOT });
@@ -77,8 +79,9 @@ const server = http.createServer((req, res) => {
       const lotteryPath = path.join(ROOT, "lottery.json");
       return fs.existsSync(lotteryPath) ? sendFile(res, lotteryPath) : sendJson(res, []);
     }
+    if (requestUrl.pathname === "/instruction.json") return sendFile(res, path.join(ROOT, "instruction.json"));
 
-    for (const prefix of ["/room/", "/wiki/", "/game/", "/settlement/", "/test_warehouse/", "/warehouse/", "/shop/", "/production/", "/lottery/", "/common/"]) {
+    for (const prefix of ["/room/", "/wiki/", "/game/", "/settlement/", "/test_warehouse/", "/warehouse/", "/shop/", "/production/", "/lottery/", "/instruction/", "/achievement/", "/common/"]) {
       if (requestUrl.pathname.startsWith(prefix)) return serveStatic(res, PUBLIC_DIR, requestUrl.pathname.slice(1));
     }
 
@@ -103,6 +106,7 @@ server.on("upgrade", (req, socket) => {
     if (room.handleShopUpgrade(req, socket, requestUrl)) return;
     if (room.handleProductionUpgrade(req, socket, requestUrl)) return;
     if (room.handleLotteryUpgrade(req, socket, requestUrl)) return;
+    if (room.handleAchievementUpgrade(req, socket, requestUrl)) return;
     if (room.handleUpgrade(req, socket, requestUrl)) return;
     socket.destroy();
   } catch (err) {

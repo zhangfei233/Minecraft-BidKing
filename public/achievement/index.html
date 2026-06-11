@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>成就</title>
+    <link rel="stylesheet" href="/achievement/achievement.css" />
+  </head>
+  <body>
+    <main class="achievement-page">
+      <aside class="filters">
+        <button id="backButton" type="button">返回</button>
+        <h1>成就</h1>
+        <button class="filter is-active" type="button" data-filter="all">全部</button>
+        <button class="filter" type="button" data-filter="completed">已完成</button>
+        <button class="filter" type="button" data-filter="open">未完成</button>
+      </aside>
+      <section class="achievement-list" id="achievementList"></section>
+    </main>
+
+    <dialog id="rewardDialog" class="reward-dialog">
+      <div class="reward-card">
+        <h2>领取奖励</h2>
+        <div id="rewardPreview" class="reward-preview"></div>
+        <button id="closeRewardDialog" type="button">确认</button>
+      </div>
+    </dialog>
+
+    <script src="/achievement/achievement.js"></script>
+  </body>
+</html>
