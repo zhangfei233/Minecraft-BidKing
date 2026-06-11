@@ -1,5 +1,13 @@
-const state = { items: [], itemMap: new Map(), profileItems: {}, production: { currentPage: 1, pages: [] }, recipes: [] };
+const state = {
+  items: [],
+  itemMap: new Map(),
+  profileItems: {},
+  production: { currentPage: 1, pages: [] },
+  recipes: [],
+};
+
 const rarityColors = { red: "#ff6060", gold: "#faff75", purple: "#964aca", blue: "#7b8afc", green: "#95de93", gray: "#c7c7c7" };
+const picker = { page: 1, pageSize: 5, search: "", onlyAvailable: false, targetPage: 1, targetSlot: 0 };
 let socket = null;
 let heartbeatTimer = null;
 
@@ -10,6 +18,10 @@ const pageSelect = document.querySelector("#pageSelect");
 const pagePrice = document.querySelector("#pagePrice");
 const recipeDialog = document.querySelector("#recipeDialog");
 const recipeDetailGrid = document.querySelector("#recipeDetailGrid");
+const recipePickerDialog = document.querySelector("#recipePickerDialog");
+const recipePickerList = document.querySelector("#recipePickerList");
+const recipeSearchInput = document.querySelector("#recipeSearchInput");
+const recipePageText = document.querySelector("#recipePageText");
 const outputBubble = document.querySelector("#outputBubble");
 
 document.addEventListener("pointerdown", (event) => {
@@ -20,6 +32,29 @@ document.querySelector("#buyPageButton").addEventListener("click", () => socket?
 document.querySelector("#collectAllButton").addEventListener("click", () => socket?.send(JSON.stringify({ type: "production_collect_all", mode: "take" })));
 document.querySelector("#sellAllOutputsButton").addEventListener("click", () => socket?.send(JSON.stringify({ type: "production_collect_all", mode: "sell" })));
 document.querySelector("#favoriteProductionButton").addEventListener("click", () => socket?.send(JSON.stringify({ type: "production_favorite_inputs" })));
+document.querySelector("#recipeSearchButton").addEventListener("click", () => {
+  picker.search = recipeSearchInput.value.trim();
+  picker.page = 1;
+  renderRecipePicker();
+});
+document.querySelector("#recipePrevButton").addEventListener("click", () => {
+  picker.page = Math.max(1, picker.page - 1);
+  renderRecipePicker();
+});
+document.querySelector("#recipeNextButton").addEventListener("click", () => {
+  picker.page += 1;
+  renderRecipePicker();
+});
+document.querySelector("#recipeAvailableButton").addEventListener("click", () => {
+  picker.onlyAvailable = !picker.onlyAvailable;
+  picker.page = 1;
+  renderRecipePicker();
+});
+recipeSearchInput.addEventListener("input", () => {
+  picker.search = recipeSearchInput.value.trim();
+  picker.page = 1;
+  renderRecipePicker();
+});
 pageSelect.addEventListener("change", () => socket?.send(JSON.stringify({ type: "production_set_page", page: Number(pageSelect.value) })));
 
 loadItems().then(loadProductionJson).then(connect);
@@ -29,6 +64,7 @@ function connect() {
   const protocol = location.protocol === "https:" ? "wss:" : "ws:";
   socket = new WebSocket(`${protocol}//${location.host}/production-ws?playerId=${encodeURIComponent(playerId)}`);
   socket.addEventListener("open", () => {
+    clearInterval(heartbeatTimer);
     heartbeatTimer = setInterval(() => socket.readyState === WebSocket.OPEN && socket.send(JSON.stringify({ type: "heartbeat" })), 10_000);
     socket.send(JSON.stringify({ type: "warehouse_clear_notification", kind: "production" }));
   });
@@ -61,13 +97,8 @@ function render() {
     <div class="production-title"><h2>生产车间</h2><p>利用战利品产生更多战利品!</p></div>
     ${slots.map((slot, index) => productionSlotHtml(slot, index, page.page)).join("")}
   `;
-  productionGrid.querySelectorAll(".recipe-select").forEach((select) => {
-    select.addEventListener("change", () => socket?.send(JSON.stringify({
-      type: "production_set_recipe",
-      page: Number(select.dataset.page),
-      slot: Number(select.dataset.slot),
-      recipeId: Number(select.value),
-    })));
+  productionGrid.querySelectorAll(".recipe-picker-button").forEach((button) => {
+    button.addEventListener("click", () => openRecipePicker(Number(button.dataset.page), Number(button.dataset.slot)));
   });
   productionGrid.querySelectorAll("[data-input]").forEach((button) => {
     button.addEventListener("click", (event) => {
@@ -102,10 +133,9 @@ function productionSlotHtml(slot, slotIndex, pageNumber) {
   return `
     <article class="production-slot">
       <label>配方选择
-        <select class="recipe-select" data-page="${pageNumber}" data-slot="${slotIndex}" ${hasOutput ? "disabled" : ""} title="${hasOutput ? "请先处理产物格中的物品" : ""}">
-          <option value="">未选择</option>
-          ${state.recipes.map((entry) => `<option value="${entry.recipe_id}" ${entry.recipe_id === slot.recipeId ? "selected" : ""}>${escapeHtml(entry.label)}</option>`).join("")}
-        </select>
+        <button class="recipe-picker-button" type="button" data-page="${pageNumber}" data-slot="${slotIndex}" ${hasOutput ? "disabled" : ""} title="${hasOutput ? "请先处理产物格中的物品" : ""}">
+          ${recipe ? escapeHtml(recipe.label) : "选择配方"}
+        </button>
       </label>
       <div class="recipe-info">
         <strong>物品信息</strong>
@@ -140,6 +170,58 @@ function productionStatus(slot, recipe) {
   const ready = recipe.recipe.every((id, index) => slot.inputs?.[index]?.id === id);
   if (!ready) return "放齐需求物品后开始生产";
   return `配方生效, 生产中. ${recipe.products.filter(Boolean).map((product) => `${itemName(product.id)}: ${Math.round(product.probability * 100)}%`).join(", ")}`;
+}
+
+function openRecipePicker(page, slot) {
+  picker.targetPage = page;
+  picker.targetSlot = slot;
+  picker.page = 1;
+  picker.search = "";
+  picker.onlyAvailable = false;
+  recipeSearchInput.value = "";
+  renderRecipePicker();
+  recipePickerDialog.showModal();
+}
+
+function renderRecipePicker() {
+  const entries = filteredRecipes();
+  const totalPages = Math.max(1, Math.ceil(entries.length / picker.pageSize));
+  picker.page = Math.max(1, Math.min(totalPages, picker.page));
+  const pageEntries = entries.slice((picker.page - 1) * picker.pageSize, picker.page * picker.pageSize);
+  recipePageText.textContent = `${picker.page}/${totalPages}`;
+  document.querySelector("#recipePrevButton").disabled = picker.page <= 1;
+  document.querySelector("#recipeNextButton").disabled = picker.page >= totalPages;
+  document.querySelector("#recipeAvailableButton").classList.toggle("active", picker.onlyAvailable);
+  recipePickerList.innerHTML = `
+    <button class="recipe-row clear-recipe-row" type="button" data-recipe="">不选择配方</button>
+    ${pageEntries.map((recipe) => `<button class="recipe-row" type="button" data-recipe="${recipe.recipe_id}">${escapeHtml(recipe.label)}</button>`).join("")}
+  `;
+  recipePickerList.querySelectorAll(".recipe-row").forEach((button) => {
+    button.addEventListener("click", () => {
+      socket?.send(JSON.stringify({
+        type: "production_set_recipe",
+        page: picker.targetPage,
+        slot: picker.targetSlot,
+        recipeId: Number(button.dataset.recipe || 0),
+      }));
+      recipePickerDialog.close();
+    });
+  });
+}
+
+function filteredRecipes() {
+  const query = picker.search.toLowerCase();
+  return state.recipes.filter((recipe) => {
+    if (query && !recipe.label.toLowerCase().includes(query)) return false;
+    if (picker.onlyAvailable && !recipeAvailable(recipe)) return false;
+    return true;
+  });
+}
+
+function recipeAvailable(recipe) {
+  const counts = {};
+  for (const id of recipe.recipe) counts[id] = (counts[id] || 0) + 1;
+  return Object.entries(counts).every(([id, count]) => Number(state.profileItems[id]?.count || 0) >= count);
 }
 
 function openRecipeDetail(slotIndex) {
@@ -189,7 +271,7 @@ function showCollectResult(body = {}) {
 
 function showCollectAllResult(body = {}) {
   const names = (body.handled || []).map((entry) => `${entry.name} x${formatNumber(entry.count)}`).join(", ") || "无";
-  alert(body.mode === "sell" ? `一键出售: ${names}\n总价值: ${formatNumber(body.total || 0)}` : `一键领取: ${names}`);
+  alert(body.mode === "sell" ? `一键出售 ${names}\n总价值 ${formatNumber(body.total || 0)}` : `一键领取 ${names}`);
 }
 
 async function loadItems() {

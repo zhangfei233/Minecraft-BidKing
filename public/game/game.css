@@ -249,10 +249,15 @@ a {
   border-radius: 8px;
   background: rgba(18, 20, 20, 0.72);
   display: grid;
-  grid-template-columns: 76px 64px 1fr;
+  grid-template-columns: 76px 1fr 76px;
   grid-template-rows: 40px 1fr;
   gap: 8px;
   padding: 10px;
+}
+
+.action-panel:not(:has(#predictButton:not([hidden]))):not(:has(#transformButton:not([hidden]))) {
+  width: 336px;
+  grid-template-columns: 76px 1fr;
 }
 
 .timer {
@@ -260,6 +265,11 @@ a {
   text-align: center;
   font-size: 24px;
   font-weight: 900;
+}
+
+.timer.made-in-heaven {
+  color: #ff9d2e;
+  text-shadow: 0 0 12px rgba(255, 157, 46, 0.72);
 }
 
 .action-panel button {
@@ -271,11 +281,16 @@ a {
 }
 
 #useItemButton {
+  grid-column: 1;
+  grid-row: 2;
   background: #d7d7d7;
   font-size: 13px;
 }
 
-#predictButton {
+#predictButton,
+#transformButton {
+  grid-column: 3;
+  grid-row: 2;
   width: 56px;
   height: 56px;
   align-self: center;
@@ -283,21 +298,39 @@ a {
   border: 1px solid var(--line);
   background: rgba(255, 255, 255, 0.08);
   padding: 4px;
+  position: relative;
 }
 
-#predictButton img {
+#predictButton img,
+#transformButton img {
   width: 48px;
   height: 48px;
   object-fit: contain;
   display: block;
 }
 
+#transformCountdown {
+  position: absolute;
+  left: 50%;
+  top: -24px;
+  transform: translateX(-50%);
+  min-width: 34px;
+  color: #ff9d2e;
+  font-size: 16px;
+  font-weight: 900;
+  text-align: center;
+  text-shadow: 0 0 8px rgba(255, 157, 46, 0.72);
+}
+
 #bidButton {
+  grid-column: 2;
+  grid-row: 2;
   background: var(--lime);
 }
 
 #bidButton:disabled,
-#predictButton:disabled {
+#predictButton:disabled,
+#transformButton:disabled {
   opacity: 0.45;
   cursor: not-allowed;
 }
@@ -552,6 +585,19 @@ dialog {
   font-weight: 800;
 }
 
+.ratio-buttons {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px;
+}
+
+.ratio-buttons button {
+  width: 100%;
+  min-height: 52px;
+  font-size: 15px;
+  padding: 0;
+}
+
 .bid-display {
   display: grid;
   gap: 8px;
@@ -706,6 +752,11 @@ dialog {
   gap: 14px;
 }
 
+.choice-card .overlay-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(160px, 1fr));
+}
+
 .overlay-actions button,
 .prediction-card button {
   border: 1px solid var(--line);
@@ -714,6 +765,35 @@ dialog {
   min-height: 38px;
   padding: 0 16px;
   cursor: pointer;
+}
+
+.choice-card [data-choice] {
+  min-height: 58px;
+  border-radius: 8px;
+  color: #f6fbff;
+  font-size: 18px;
+  font-weight: 900;
+  letter-spacing: 0;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.12), 0 10px 26px rgba(0, 0, 0, 0.24);
+}
+
+.choice-card [data-choice="domain"] {
+  background: linear-gradient(180deg, #143c74, #071b38);
+  border-color: #3a7bd0;
+}
+
+.choice-card [data-choice="makora"] {
+  background: linear-gradient(180deg, #741d22, #3a090d);
+  border-color: #c1454d;
+}
+
+.choice-card [data-choice]:disabled {
+  background: #555;
+  border-color: #7a7a7a;
+  color: #bdbdbd;
+  opacity: 0.58;
+  cursor: not-allowed;
+  box-shadow: none;
 }
 
 .prediction-card table {
@@ -731,4 +811,212 @@ dialog {
 .prediction-card [data-pick].selected {
   background: #76d9ff;
   color: #051014;
+}
+
+.animation-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 2147483647;
+  pointer-events: all;
+  overflow: hidden;
+}
+
+.webp-center-stage {
+  width: 100vw;
+  height: 100vh;
+  background: #000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.fullscreen-animation {
+  width: 95vw;
+  height: 95vh;
+  object-fit: contain;
+  display: block;
+}
+
+.centered-webp {
+  width: 90vw;
+  height: 90vh;
+  object-fit: contain;
+  display: block;
+}
+
+.animation-dim-layer {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  animation: animationDimInStayOut 3.5s ease-in-out forwards;
+}
+
+.slide-animation-image {
+  position: absolute;
+  top: 0;
+  height: 100vh;
+  width: auto;
+  animation: animationSlideInStayOut 3.5s ease-in-out forwards;
+}
+
+.fade-center-animation-image {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  height: 100vh;
+  width: auto;
+  transform: translate(-50%, -50%);
+  opacity: 0;
+  animation: animationFadeInStayOut 2s ease-in-out forwards;
+}
+
+.slide-image-from-left {
+  position: absolute;
+  top: 0;
+  height: 100vh;
+  width: auto;
+  animation: slideInFromLeftStayOutRight 5s ease-in-out forwards;
+}
+
+.duel-stage {
+  position: absolute;
+  inset: 0;
+  background: #000;
+  opacity: 1;
+  animation: duelStageFadeOut 5s linear forwards;
+}
+
+.duel-piece {
+  position: absolute;
+  top: 0;
+  height: 100vh;
+  width: auto;
+  max-width: none;
+  will-change: transform;
+}
+
+.duel-left {
+  left: 50%;
+  transform: translateX(calc(-50% - 100vw));
+  animation: duelLeftIn 5s ease-in-out forwards;
+}
+
+.duel-right {
+  left: 50%;
+  transform: translateX(calc(-50% + 100vw));
+  animation: duelRightIn 5s ease-in-out forwards;
+}
+
+@keyframes animationSlideInStayOut {
+  0% {
+    left: 100vw;
+  }
+
+  20% {
+    left: calc(100vw - var(--image-width));
+  }
+
+  90% {
+    left: calc(100vw - var(--image-width));
+  }
+
+  100% {
+    left: calc(-1 * var(--image-width));
+  }
+}
+
+@keyframes animationDimInStayOut {
+  0% {
+    opacity: 0;
+  }
+
+  20% {
+    opacity: 1;
+  }
+
+  80% {
+    opacity: 1;
+  }
+
+  100% {
+    opacity: 0;
+  }
+}
+
+@keyframes animationFadeInStayOut {
+  0% {
+    opacity: 0;
+  }
+
+  16.666% {
+    opacity: 1;
+  }
+
+  83.333% {
+    opacity: 1;
+  }
+
+  100% {
+    opacity: 0;
+  }
+}
+
+@keyframes slideInFromLeftStayOutRight {
+  0% {
+    left: calc(-1 * var(--image-width));
+  }
+
+  20% {
+    left: 0;
+  }
+
+  70% {
+    left: 0;
+  }
+
+  100% {
+    left: 100vw;
+  }
+}
+
+@keyframes duelLeftIn {
+  0% {
+    transform: translateX(calc(-50% - 100vw));
+  }
+
+  22.222% {
+    transform: translateX(-50%);
+  }
+
+  100% {
+    transform: translateX(-50%);
+  }
+}
+
+@keyframes duelRightIn {
+  0% {
+    transform: translateX(calc(-50% + 100vw));
+  }
+
+  22.222% {
+    transform: translateX(-50%);
+  }
+
+  100% {
+    transform: translateX(-50%);
+  }
+}
+
+@keyframes duelStageFadeOut {
+  0% {
+    opacity: 1;
+  }
+
+  88.888% {
+    opacity: 1;
+  }
+
+  100% {
+    opacity: 0;
+  }
 }

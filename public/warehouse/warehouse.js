@@ -261,14 +261,14 @@ function renderLottery() {
       <button id="favoriteLotteryButton" type="button">一键收藏抽奖道具</button>
       <p>${heldCount > 0 ? `当前有 ${formatNumber(heldCount)} 个抽奖道具` : "当前无抽奖道具"}</p>
       <div class="lottery-consume-slot">${slotItem ? `<img src="${slotItem.image}" alt="" /><strong>${escapeHtml(slotItem.name)}</strong>` : "<span>+</span>"}</div>
-      <button id="drawLotteryButton" type="button" ${!state.lottery.slot || hasResults ? "disabled" : ""}>鎶藉</button>
+      <button id="drawLotteryButton" type="button" ${!state.lottery.slot || hasResults ? "disabled" : ""}>抽奖</button>
       <button id="refillLotteryButton" type="button" ${heldCount <= 0 || state.lottery.slot || hasResults ? "disabled" : ""}>补充道具</button>
     </section>
     <section class="lottery-results">
       <div class="lottery-result-grid">${(state.lottery.results || []).map(lotteryResultCard).join("")}</div>
       <footer>
-        <strong>鎬讳环鍊? ${formatNumber(totalValue)}</strong>
-        <button id="takeLotteryButton" type="button" ${hasResults ? "" : "disabled"}>棰嗗彇</button>
+        <strong>总价值 ${formatNumber(totalValue)}</strong>
+        <button id="takeLotteryButton" type="button" ${hasResults ? "" : "disabled"}>领取</button>
         <button id="sellLotteryButton" type="button" ${hasResults ? "" : "disabled"}>出售</button>
         <button id="sellUnfavoriteLotteryButton" type="button" ${hasResults ? "" : "disabled"}>出售非收藏</button>
       </footer>

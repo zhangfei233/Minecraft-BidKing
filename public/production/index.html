@@ -33,11 +33,29 @@
         <div class="production-grid" id="productionGrid"></div>
       </section>
     </main>
+
     <dialog id="recipeDialog" class="recipe-dialog">
       <form method="dialog"><button value="close" aria-label="关闭">×</button></form>
       <h2>需求物品</h2>
       <div id="recipeDetailGrid" class="recipe-detail-grid"></div>
     </dialog>
+
+    <dialog id="recipePickerDialog" class="recipe-picker-dialog">
+      <form method="dialog"><button value="close" aria-label="关闭">×</button></form>
+      <div class="recipe-search-row">
+        <input id="recipeSearchInput" type="search" placeholder="搜索框" autocomplete="off" />
+        <button id="recipeSearchButton" type="button" aria-label="搜索">⌕</button>
+      </div>
+      <div id="recipePickerList" class="recipe-picker-list"></div>
+      <footer class="recipe-picker-footer">
+        <span>页数</span>
+        <button id="recipePrevButton" type="button">←</button>
+        <strong id="recipePageText">1/1</strong>
+        <button id="recipeNextButton" type="button">→</button>
+        <button id="recipeAvailableButton" type="button">可生产</button>
+      </footer>
+    </dialog>
+
     <div id="outputBubble" class="output-bubble" hidden></div>
     <script type="module" src="/production/production.js"></script>
   </body>

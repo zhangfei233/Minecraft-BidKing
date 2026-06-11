@@ -27,7 +27,8 @@
   "game": {
     "max_players": 4,
     "system_hint_probability": 0.3,
-    "dividend_ratio": 0.1
+    "dividend_ratio": 0.1,
+    "chair_item_id": 2253
   },
   "port": 3000
 }

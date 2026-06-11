@@ -124,8 +124,10 @@ export class IsaCharacter extends Character {
 
 export class IvorCharacter extends Character {
   onRoundStart({ warehouse, viewNumber, round }) {
-    if (round !== 5) return null;
-    return rarityPackage(warehouse, viewNumber, realItems(warehouse).map(({ index }) => index), "显示所有战利品的品质");
+    const indexes = realItems(warehouse).map(({ index }) => index);
+    if (round === 4) return itemPackage(warehouse, viewNumber, { text: "显示所有战利品的轮廓", indexes, hintType: "item_outline" });
+    if (round === 5) return rarityPackage(warehouse, viewNumber, indexes, "显示所有战利品的品质");
+    return null;
   }
 }
 

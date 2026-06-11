@@ -8,6 +8,7 @@ local/
 saves/
 logs/
 note.txt
+resource/animation/*.html
 
 .env
 .env.*

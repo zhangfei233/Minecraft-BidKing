@@ -383,6 +383,12 @@ input {
   color: var(--text);
 }
 
+.prop-card:disabled {
+  opacity: 0.35;
+  filter: grayscale(1);
+  cursor: not-allowed;
+}
+
 .start-panel {
   grid-column: 3;
   grid-row: 3;

@@ -208,11 +208,14 @@ function renderInventory(me) {
 
 function openPropPicker(slot, me) {
   editingSlot = slot;
+  const selectedCounts = countSelectedProps(slot);
   const propEntries = Object.entries(me.ownedProps || {}).filter(([, count]) => count > 0);
   propGrid.innerHTML = propEntries.map(([id, count]) => {
     const prop = room.props?.[id] || { id, name: id, description: "" };
+    const remaining = Number(count || 0) - Number(selectedCounts[id] || 0);
+    const disabled = remaining <= 0;
     return `
-      <button class="prop-card" type="button" data-id="${id}" title="${escapeHtml(prop.description || "")}" style="--prop-bg:${propColor(prop)}">
+      <button class="prop-card" type="button" data-id="${id}" ${disabled ? "disabled" : ""} title="${escapeHtml(prop.description || "")}" style="--prop-bg:${propColor(prop)}">
         ${prop.image ? `<img src="${prop.image}" alt="${escapeHtml(prop.name)}" />` : ""}
         <strong>${escapeHtml(prop.name)}</strong>
         <span>Lv.${prop.level || 1} · x${count}</span>
@@ -221,6 +224,7 @@ function openPropPicker(slot, me) {
   }).join("") || "<p>没有可携带的道具</p>";
   for (const button of propGrid.querySelectorAll(".prop-card")) {
     button.addEventListener("click", () => {
+      if (button.disabled) return;
       selection.props[editingSlot] = { id: button.dataset.id, level: 1 };
       sendSelection();
       propPicker.close();
@@ -228,6 +232,15 @@ function openPropPicker(slot, me) {
     });
   }
   propPicker.showModal();
+}
+
+function countSelectedProps(exceptSlot = -1) {
+  const counts = {};
+  selection.props.forEach((prop, index) => {
+    if (!prop || index === exceptSlot) return;
+    counts[prop.id] = (counts[prop.id] || 0) + 1;
+  });
+  return counts;
 }
 
 function openSidePage(url) {

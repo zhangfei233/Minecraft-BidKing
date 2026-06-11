@@ -14,7 +14,7 @@ import {
 } from "../player/profile.js";
 import { loadConfig, loadItemsById } from "../items/items.js";
 import { decodeWsText, sendWsJson } from "../net/websocket.js";
-import { itemFullInfoKnown, splitTypes } from "./hints.js";
+import { itemFullInfoKnown, itemOutlineKnown, itemRarityKnown, splitTypes } from "./hints.js";
 import { error as logError, info as logInfo } from "../net/logger.js";
 import { loadProductionRecipes, runProduction } from "../production/production.js";
 import { loadLotteryRecipes, lotteryConsumableIds } from "../lottery/lottery.js";
@@ -24,6 +24,18 @@ const ROUND_COUNT = 5;
 const ROUND_MS = 62_000;
 const INTERMISSION_MS = 3_000;
 const WIN_RATIOS = [2, 1.6, 1.3, 1.1, 1];
+const ANIMATION_SECONDS = {
+  1: 14,
+  2: 10,
+  3: 12,
+  4: 4,
+  5: 2,
+  6: 8.75,
+  7: 5.25,
+  8: 10.25,
+  9: 10,
+  10: 5,
+};
 const HEARTBEAT_TIMEOUT_MS = 45_000;
 const GAME_RECONNECT_GRACE_MS = 60_000;
 const RARITIES = ["gray", "green", "blue", "purple", "gold", "red"];
@@ -49,6 +61,7 @@ export class GameSession {
     const gameConfig = loadConfig(rootDir).game || {};
     this.systemHintProbability = Number(gameConfig.system_hint_probability ?? 0.3);
     this.dividendRatio = Number(gameConfig.dividend_ratio ?? 0.1);
+    this.chairItemId = Number(gameConfig.chair_item_id ?? 2253);
     this.warehouse = new Warehouse({ rootDir, random, viewCount: players.length });
     this.warehouse.generate(container.k, { entryFee: container.entryFee });
     this.systemHintPool = this.createSystemHintPool();
@@ -85,8 +98,12 @@ export class GameSession {
     this.roundTimer = null;
     this.intermissionTimer = null;
     this.pauseTimer = null;
+    this.endedRounds = new Set();
     this.roundEndsAt = null;
     this.roundPaused = false;
+    this.currentRoundDurationMs = ROUND_MS;
+    this.actionLockedPlayerIds = new Set();
+    this.roundStartAnimations = [];
     this.started = false;
     this.finished = false;
     this.advantages = new AdvantageTracker();
@@ -225,15 +242,41 @@ export class GameSession {
     this.round = round;
     this.roundStartedAt = Date.now();
     const roundMs = this.roundDurationMsFor(round);
+    this.currentRoundDurationMs = roundMs;
     this.roundEndsAt = Date.now() + roundMs;
     this.roundPaused = false;
+    this.actionLockedPlayerIds = new Set();
+    this.roundStartAnimations = [];
+    this.deferredRoundStartPayloads = [];
     for (const player of this.players) {
       player.propUsesThisRound = 0;
       player.submitted[round - 1] = Boolean(player.disconnected);
       player.bids[round - 1] = player.disconnected ? 0 : null;
       this.applyRoundStartCharacterProps(player, round);
-      this.send(player, { type: "round_start", body: { round, countdownSeconds: this.clientCountdownSecondsFor(roundMs) } });
     }
+    if (round === 5) {
+      for (const player of this.players) {
+        if (player.characterId === "character_15") this.emitGojoRoundHint(player);
+      }
+    }
+    this.applyRoundStartDomains(round);
+    for (const player of this.players) {
+      this.send(player, {
+        type: "round_start",
+        body: {
+          round,
+          countdownSeconds: this.clientCountdownSecondsFor(roundMs),
+          roundInitialSeconds: this.clientCountdownSecondsFor(roundMs),
+          actionLocked: this.actionLockedPlayerIds.has(player.id),
+        },
+      });
+    }
+    if (this.roundStartAnimations.length) {
+      const seconds = this.roundStartAnimations.reduce((sum, animation) => sum + Number(animation.durationSeconds || 0), 0);
+      this.pauseRoundTime({ seconds, animations: this.roundStartAnimations });
+    }
+    for (const entry of this.deferredRoundStartPayloads) this.send(entry.player, entry.payload);
+    this.deferredRoundStartPayloads = [];
     this.broadcastPublicState({ clearBidState: true });
     if (round > 1) this.emitSystemPublicHint({ force: false });
     for (const player of this.players) {
@@ -241,11 +284,43 @@ export class GameSession {
         this.emitCharacterStartHint(player);
         if (characterHasRoundOneEffect(player.characterId)) this.emitCharacterRoundHint(player);
       } else {
+        if (round === 5 && player.characterId === "character_15") continue;
         this.emitCharacterRoundHint(player);
       }
     }
     this.sendRoundStartChoiceRequests(round);
+    if (round === 1) this.broadcastAnimationPreloadList();
     this.scheduleRoundTimer();
+  }
+
+  broadcastAnimationPreloadList() {
+    const ids = new Set();
+    const characterIds = new Set(this.players.map((player) => player.characterId));
+    if (characterIds.has("character_21")) {
+      ids.add(1);
+      ids.add(3);
+    }
+    if (characterIds.has("character_20")) {
+      ids.add(2);
+      ids.add(4);
+    }
+    if (characterIds.has("character_14")) {
+      ids.add(5);
+      ids.add(9);
+    }
+    if (characterIds.has("character_15")) ids.add(8);
+    if (characterIds.has("character_22")) {
+      ids.add(6);
+      ids.add(7);
+    }
+    if (characterIds.has("character_14") && characterIds.has("character_15")) ids.add(10);
+    if (!ids.size) return;
+    this.broadcast({
+      type: "preload_animations",
+      body: {
+        animations: [...ids].sort((a, b) => a - b).map((id) => ({ id, durationSeconds: ANIMATION_SECONDS[id] || 1 })),
+      },
+    });
   }
 
   roundDurationMsFor() {
@@ -273,19 +348,21 @@ export class GameSession {
     this.broadcast({ type: "set_round_timer", body: { countdownSeconds: this.clientCountdownSecondsFor(clamped) } });
   }
 
-  pauseRoundTime({ seconds, animations = [] } = {}) {
+  pauseRoundTime({ seconds, animations = [], resumeRemainingMs = null } = {}) {
     if (this.finished || !this.roundEndsAt) return;
     const ms = Math.max(0, Math.floor(Number(seconds || 0) * 1000));
     if (!ms) return;
     clearTimeout(this.roundTimer);
     clearTimeout(this.pauseTimer);
     this.roundPaused = true;
-    this.roundEndsAt += ms;
+    const resumeMs = resumeRemainingMs == null ? null : Math.max(0, Math.floor(Number(resumeRemainingMs) || 0));
+    this.roundEndsAt = resumeMs == null ? this.roundEndsAt + ms : Date.now() + ms + resumeMs;
+    const countdownAfterPause = this.clientCountdownSecondsFor(Math.max(0, this.roundEndsAt - Date.now() - ms));
     this.broadcast({
       type: "round_pause",
       body: {
         pauseSeconds: Math.ceil(ms / 1000),
-        countdownSeconds: this.currentCountdownSeconds(),
+        countdownSeconds: countdownAfterPause,
         animations,
       },
     });
@@ -396,13 +473,19 @@ export class GameSession {
   endRound() {
     if (this.finished) return;
     const roundIndex = this.round - 1;
+    if (this.endedRounds.has(roundIndex)) return;
+    this.endedRounds.add(roundIndex);
+    clearTimeout(this.roundTimer);
     for (const player of this.players) {
       if (!player.submitted[roundIndex]) player.bids[roundIndex] = 0;
       player.submitted[roundIndex] = true;
     }
 
+    this.applyMegumiRoundEndForAll(roundIndex);
     const result = this.evaluateWinner(roundIndex);
     this.applyRoundEndCharacterProps(roundIndex);
+    const roundEndAnimations = this.roundEndAnimations(roundIndex);
+    const roundEndPauseMs = INTERMISSION_MS + roundEndAnimations.reduce((sum, animation) => sum + Math.ceil(Number(animation.durationSeconds || 0) * 1000), 0);
     for (const player of this.players) player.publicRound = this.round + 1;
     this.broadcast({
       type: "round_end",
@@ -416,19 +499,34 @@ export class GameSession {
         winnerId: result.winnerId,
         finished: result.finished,
         passed: !result.finished,
-        pauseSeconds: Math.ceil(INTERMISSION_MS / 1000),
-        animations: [],
+        pauseSeconds: Math.ceil(roundEndPauseMs / 1000),
+        animations: roundEndAnimations,
       },
     });
 
     if (result.finished || this.round >= ROUND_COUNT) {
-      this.finishGame(result.winnerId);
+      clearTimeout(this.intermissionTimer);
+      this.intermissionTimer = setTimeout(() => this.finishGame(result.winnerId), roundEndPauseMs);
+      this.intermissionTimer.unref?.();
       return;
     }
 
     clearTimeout(this.intermissionTimer);
-    this.intermissionTimer = setTimeout(() => this.startRound(this.round + 1), INTERMISSION_MS);
+    this.intermissionTimer = setTimeout(() => this.startRound(this.round + 1), roundEndPauseMs);
     this.intermissionTimer.unref?.();
+  }
+
+  roundEndAnimations(roundIndex) {
+    if (roundIndex !== 3) return [];
+    const triggered = this.players.filter((player) => (
+      player.characterId === "character_14"
+      && [0, 1, 2].every((index) => (player.bids[index] || 0) === 0)
+    ));
+    return triggered.map((_, index) => ({
+      id: 5,
+      delaySeconds: index === 0 ? Math.ceil(INTERMISSION_MS / 1000) : 0,
+      durationSeconds: ANIMATION_SECONDS[5],
+    }));
   }
 
   handleMessage(player, buffer) {
@@ -484,10 +582,17 @@ export class GameSession {
       return;
     }
 
+    if (message.type === "reiner_transform") {
+      this.receiveReinerTransform(player);
+      return;
+    }
+
   }
 
   receiveBid(player, amount) {
+    if (this.roundPaused) return;
     const roundIndex = this.round - 1;
+    if (this.actionLockedPlayerIds.has(player.id)) return;
     if (roundIndex < 0 || roundIndex >= ROUND_COUNT || player.submitted[roundIndex]) return;
     const bid = Math.max(0, Math.floor(Number(amount) || 0));
     player.bids[roundIndex] = bid;
@@ -498,7 +603,12 @@ export class GameSession {
   }
 
   useProp(player, slot, target = null) {
+    if (this.roundPaused) return;
     const roundIndex = this.round - 1;
+    if (this.actionLockedPlayerIds.has(player.id)) {
+      this.send(player, { type: "error", message: "本回合无法使用道具" });
+      return;
+    }
     if (!Number.isInteger(slot) || slot < 0 || slot >= 5) {
       this.send(player, { type: "error", message: "角色技能执行失败" });
       return;
@@ -546,6 +656,61 @@ export class GameSession {
     return { type: "hint", title: `\u9053\u5177\u3010${selected.id}\u3011`, text: "\u8be5\u4e13\u5c5e\u9053\u5177\u5c1a\u672a\u5b9e\u73b0", show: false, message: [] };
   }
 
+  receiveReinerTransform(player) {
+    if (player.characterId !== "character_22") return;
+    if (this.roundPaused || this.actionLockedPlayerIds.has(player.id)) return;
+    if (player.characterState.reinerTransformed) return;
+    const roundIndex = this.round - 1;
+    if (roundIndex < 0 || player.submitted[roundIndex]) return;
+    const remaining = Math.max(0, this.roundEndsAt - Date.now());
+    if (remaining <= this.currentRoundDurationMs / 2) {
+      this.send(player, { type: "error", message: "已超过本回合前半段，无法变身" });
+      return;
+    }
+
+    player.characterState.reinerTransformed = true;
+    player.characterState.reinerChairCount = Number(player.characterState.reinerChairCount || 0);
+    const largeEntries = realItemEntries(this.warehouse).filter(({ item }) => itemCells(item) > 9);
+    const highestValue = largeEntries.reduce((best, entry) => {
+      if (!best) return entry;
+      const price = Number(entry.item.price || 0);
+      const bestPrice = Number(best.item.price || 0);
+      return price > bestPrice ? entry : best;
+    }, null);
+    const rawHints = largeEntries.map(({ index }) => ({ type: "item_outline", itemIndex: index }));
+    const publicHints = highestValue ? [{ type: "item_full", itemIndex: highestValue.index }] : [];
+
+    this.pauseRoundTime({
+      seconds: ANIMATION_SECONDS[6] + ANIMATION_SECONDS[7],
+      animations: [
+        { id: 6, durationSeconds: ANIMATION_SECONDS[6] },
+        { id: 7, durationSeconds: ANIMATION_SECONDS[7] },
+      ],
+    });
+
+    const privateMessage = rawHints.map((hint) => this.warehouse.addHint(player.gameIndex, hint));
+    this.send(player, {
+      type: "hint",
+      title: "\u89d2\u8272\u6280\u80fd",
+      text: "Reiner变身铠之巨人，显示所有占格数大于9的战利品轮廓。",
+      icon: this.characterDefinitions.get(player.characterId)?.image || "",
+      show: privateMessage.length > 0,
+      message: privateMessage,
+    });
+    for (const target of this.players) {
+      const message = publicHints.map((hint) => this.warehouse.addHint(target.gameIndex, hint));
+      this.send(target, {
+        type: "hint",
+        title: "\u89d2\u8272\u6280\u80fd",
+        text: `Reiner玩家${player.nickname}变身铠之巨人，向全体揭示一件高价值物品`,
+        icon: this.characterDefinitions.get(player.characterId)?.image || "",
+        show: message.length > 0,
+        message,
+      });
+    }
+    this.broadcastPublicState({ clearBidState: false });
+  }
+
   applyRoundStartCharacterProps(player, round) {
     if (player.characterId === "character_17") this.tryGrantPendingExclusive(player);
     if (player.characterId === "character_18" && round % 2 === 1 && !player.props.some((prop) => prop?.id === "sp_prop2")) {
@@ -569,11 +734,94 @@ export class GameSession {
     }
   }
 
+  applyRoundStartDomains(round) {
+    if (round !== 5) return;
+    const activeDomains = [];
+    for (const player of this.players) {
+      player.characterState.ryoiki = false;
+      if (player.characterId === "character_14" && this.shouldTriggerSukunaDomain(player)) {
+        player.characterState.ryoiki = true;
+        activeDomains.push({ source: player, type: "sukuna", name: "伏魔御厨子" });
+      }
+      if (player.characterId === "character_15" && player.characterState.gojoPurpleTriggered) {
+        player.characterState.ryoiki = true;
+        activeDomains.push({ source: player, type: "gojo", name: "无量空处" });
+      }
+    }
+    if (!activeDomains.length) return;
+    const gojoCount = activeDomains.filter((domain) => domain.type === "gojo").length;
+    const sukunaCount = activeDomains.filter((domain) => domain.type === "sukuna").length;
+    if (gojoCount > 0 && sukunaCount > 0) {
+      this.roundStartAnimations = [{ id: 10, durationSeconds: ANIMATION_SECONDS[10] }];
+    } else if (gojoCount > 0) {
+      this.roundStartAnimations = Array.from({ length: gojoCount }, () => ({ id: 8, durationSeconds: ANIMATION_SECONDS[8] }));
+    } else if (sukunaCount > 0) {
+      this.roundStartAnimations = Array.from({ length: sukunaCount }, () => ({ id: 9, durationSeconds: ANIMATION_SECONDS[9] }));
+    }
+
+    for (const domain of activeDomains) {
+      this.deferRoundStartCharacterTextToAll(domain.source, `触发【${domain.name}】。`);
+    }
+
+    for (const domain of activeDomains) {
+      for (const target of this.players) {
+        if (target.id === domain.source.id) continue;
+        if (target.characterState.ryoiki) {
+          this.deferRoundStartPayload(target, characterTextHint(`抵消了${domain.source.nickname}玩家的领域【${domain.name}】的效果。`, this.characterDefinitions.get(target.characterId)?.image));
+          continue;
+        }
+        if (domain.type === "sukuna") this.applySukunaDomainEffect(domain.source, target, round);
+        if (domain.type === "gojo") this.applyGojoDomainEffect(domain.source, target, round);
+      }
+    }
+  }
+
+  shouldTriggerSukunaDomain(player) {
+    const view = this.warehouse.getView(player.gameIndex);
+    const items = realItemEntries(this.warehouse);
+    const knownCount = items.filter(({ item }) => itemOutlineKnown(view, item) || itemRarityKnown(view, item) || itemFullInfoKnown(view, item)).length;
+    return knownCount >= Math.ceil(items.length * 2 / 3);
+  }
+
+  applySukunaDomainEffect(source, target, round) {
+    const occupiedSlots = target.props.map((prop, slot) => ({ prop, slot })).filter(({ prop }) => prop);
+    const removeCount = Math.ceil(occupiedSlots.length / 2);
+    for (const entry of sample(occupiedSlots, removeCount, this.random)) target.props[entry.slot] = null;
+    if (!target.characterState.domainBidMultiplier) target.characterState.domainBidMultiplier = {};
+    target.characterState.domainBidMultiplier[round - 1] = Number(target.characterState.domainBidMultiplier[round - 1] || 1) * 0.8;
+    this.send(target, { type: "prop_slots", body: { props: target.props, uses: target.propUsesThisRound || 0, maxUses: maxPropUsesFor(target) } });
+    this.deferRoundStartPayload(target, characterTextHint(`受到${source.nickname}玩家的领域【伏魔御厨子】的效果。`, this.characterDefinitions.get(source.characterId)?.image));
+  }
+
+  applyGojoDomainEffect(source, target, round) {
+    const roundIndex = round - 1;
+    const previousBid = target.bids[roundIndex - 1] || 0;
+    target.bids[roundIndex] = previousBid;
+    target.submitted[roundIndex] = true;
+    this.actionLockedPlayerIds.add(target.id);
+    this.deferRoundStartPayload(target, characterTextHint(`受到${source.nickname}玩家的领域【无量空处】的效果。`, this.characterDefinitions.get(source.characterId)?.image));
+  }
+
   applyRoundEndCharacterProps(roundIndex) {
     for (const player of this.players) {
       if (player.characterId === "character_17") this.applyCreeperRoundEnd(player, roundIndex);
       if (player.characterId === "character_16") this.applyLuxunRoundEnd(player, roundIndex);
       if (player.characterId === "character_19") this.applyRaidCapRoundEnd(player, roundIndex);
+      if (player.characterId === "character_22") this.applyReinerRoundEnd(player, roundIndex);
+    }
+  }
+
+  applyReinerRoundEnd(player, roundIndex) {
+    if (!player.characterState.reinerTransformed) return;
+    const ownBid = player.bids[roundIndex] || 0;
+    const higherCount = this.players.filter((entry) => entry.id !== player.id && (entry.bids[roundIndex] || 0) > ownBid).length;
+    if (higherCount > 0) {
+      player.characterState.reinerChairCount = Number(player.characterState.reinerChairCount || 0) + higherCount;
+    }
+  }
+
+  applyMegumiRoundEndForAll(roundIndex) {
+    for (const player of this.players) {
       if (player.characterId === "character_21") this.applyMegumiRoundEnd(player, roundIndex);
     }
   }
@@ -636,6 +884,7 @@ export class GameSession {
   sendRoundStartChoiceRequests(round) {
     for (const player of this.players) {
       if (player.characterId !== "character_21" || player.disconnected) continue;
+      if (this.actionLockedPlayerIds.has(player.id)) continue;
       if (round === 2 && !player.characterState.megumiMode) {
         this.send(player, {
           type: "megumi_choice_request",
@@ -655,6 +904,11 @@ export class GameSession {
       return;
     }
     player.characterState.megumiMode = normalized;
+    if (normalized === "makora") {
+      this.pauseRoundTime({ seconds: ANIMATION_SECONDS[1], animations: [{ id: 1, durationSeconds: ANIMATION_SECONDS[1] }] });
+    } else {
+      this.pauseRoundTime({ seconds: ANIMATION_SECONDS[3], animations: [{ id: 3, durationSeconds: ANIMATION_SECONDS[3] }] });
+    }
     const text = normalized === "domain"
       ? `Megumi玩家${player.nickname}选择了领域展开：嵌合暗翳庭`
       : `Megumi玩家${player.nickname}选择了跟你爆了：召唤魔虚罗Makora`;
@@ -676,6 +930,8 @@ export class GameSession {
 
   receiveMegumiPrediction(player, predictions) {
     if (player.characterId !== "character_21" || player.characterState.megumiMode !== "makora") return;
+    if (this.roundPaused) return;
+    if (this.actionLockedPlayerIds.has(player.id)) return;
     if (player.submitted?.[this.round - 1]) return;
     const normalized = {};
     for (const target of this.players) {
@@ -716,6 +972,17 @@ export class GameSession {
   broadcastCharacterText(player, text) {
     for (const target of this.players) {
       this.send(target, characterTextHint(text, this.characterDefinitions.get(player.characterId)?.image));
+    }
+  }
+
+  deferRoundStartPayload(player, payload) {
+    if (!this.deferredRoundStartPayloads) this.deferredRoundStartPayloads = [];
+    this.deferredRoundStartPayloads.push({ player, payload });
+  }
+
+  deferRoundStartCharacterTextToAll(player, text) {
+    for (const target of this.players) {
+      this.deferRoundStartPayload(target, characterTextHint(text, this.characterDefinitions.get(player.characterId)?.image));
     }
   }
 
@@ -813,7 +1080,17 @@ export class GameSession {
   applyMadeInHeavenTimingShift() {
     if (!this.roundEndsAt || this.finished) return;
     const remaining = Math.max(0, this.roundEndsAt - Date.now());
-    this.setRoundRemainingMs(Math.ceil(remaining * 0.5));
+    const adjustedRemaining = Math.ceil(remaining * 0.5);
+    const pauseSeconds = ANIMATION_SECONDS[2] + ANIMATION_SECONDS[4];
+    this.broadcast({ type: "timer_style", body: { madeInHeaven: true } });
+    this.pauseRoundTime({
+      seconds: pauseSeconds,
+      animations: [
+        { id: 2, durationSeconds: ANIMATION_SECONDS[2] },
+        { id: 4, durationSeconds: ANIMATION_SECONDS[4] },
+      ],
+      resumeRemainingMs: adjustedRemaining,
+    });
   }
 
   finishGame(winnerId) {
@@ -826,14 +1103,16 @@ export class GameSession {
     clearInterval(this.heartbeatTimer);
 
     const warehouseItems = this.warehouse.getSerializableItems();
-    const totalValue = warehouseItems.reduce((sum, item) => sum + Number(item.price || 0), 0);
     const winner = winnerId ? this.players.find((player) => player.id === winnerId) : null;
+    const chairReplacement = winner ? this.createChairReplacement(winner, warehouseItems) : null;
+    const actualWarehouseItems = chairReplacement?.warehouseItems || warehouseItems;
+    const totalValue = actualWarehouseItems.reduce((sum, item) => sum + Number(item.price || 0), 0);
     this.lastWinnerId = winner?.id || null;
     const finalBid = winner ? lastBidFor(winner) : 0;
     this.logFinalBidModifiers(this.round - 1);
     const finalProfit = winner ? totalValue - finalBid : 0;
     const dividend = winner && finalProfit < 0 ? Math.ceil(Math.abs(finalProfit) * Math.max(0, this.dividendRatio)) : 0;
-    this.wonItemCounts = winner ? countItems(warehouseItems) : {};
+    this.wonItemCounts = winner ? countItems(actualWarehouseItems) : {};
     const extraRewardsByPlayer = new Map(this.players.map((player) => [player.id, []]));
     const lotteryCountsBefore = new Map(this.players.map((player) => [player.id, lotteryItemCount(player.profile, this.lotteryConsumableIds)]));
 
@@ -859,7 +1138,7 @@ export class GameSession {
 
     if (winner) {
       deductMoneyAllowDebt(winner.profile, finalBid);
-      addWarehouseItemsToProfile(winner.profile, warehouseItems);
+      addWarehouseItemsToProfile(winner.profile, actualWarehouseItems);
       addProfileItem(winner.profile, WINNER_REWARD_ITEM_ID, 1);
       extraRewardsByPlayer.get(winner.id).push(rewardItem(this.itemsById, WINNER_REWARD_ITEM_ID));
       saveProfileByNickname(this.rootDir, winner.profile);
@@ -886,9 +1165,55 @@ export class GameSession {
         winner: winner ? publicPlayer(winner) : null,
         favoritesByPlayer: Object.fromEntries(this.players.map((player) => [player.id, favoriteIds(player.profile)])),
         copiedItems: this.players.flatMap((player) => player.copiedItems.map((entry) => ({ ...entry, nickname: player.nickname }))),
+        chairReplacement: chairReplacement ? {
+          nickname: winner.nickname,
+          delta: chairReplacement.delta,
+          replacedItems: chairReplacement.replacedItems,
+          chairItem: chairReplacement.chairItem,
+        } : null,
         extraRewardsByPlayer: Object.fromEntries(extraRewardsByPlayer),
       },
     });
+  }
+
+  createChairReplacement(winner, publicWarehouseItems) {
+    if (winner.characterId !== "character_22" || !winner.characterState.reinerTransformed) return null;
+    const chairCount = Math.max(0, Math.floor(Number(winner.characterState.reinerChairCount || 0)));
+    if (!chairCount) return null;
+    const chairItem = this.itemsById.get(this.chairItemId);
+    if (!chairItem) return null;
+    const actual = publicWarehouseItems.map((item) => ({ ...item }));
+    const candidates = actual
+      .map((item, index) => ({ item, index }))
+      .filter(({ item }) => item && item.id !== 0 && Number(item.id) !== Number(this.chairItemId));
+    const picked = sample(candidates, Math.min(chairCount, candidates.length), this.random);
+    const replacedItems = [];
+    let delta = 0;
+    for (const { item, index } of picked) {
+      replacedItems.push({ ...item });
+      delta += Number(chairItem.price || 0) - Number(item.price || 0);
+      actual[index] = {
+        ...item,
+        ...chairItem,
+        id: this.chairItemId,
+        width: item.width,
+        height: item.height,
+        x: item.x,
+        y: item.y,
+      };
+    }
+    if (!replacedItems.length) return null;
+    return {
+      warehouseItems: actual,
+      delta,
+      replacedItems,
+      chairItem: {
+        id: this.chairItemId,
+        name: chairItem.name || `#${this.chairItemId}`,
+        price: Number(chairItem.price || 0),
+        rarity: chairItem.rarity || "gray",
+      },
+    };
   }
 
   sellSettlementItems(player, mode, options = {}) {
@@ -927,6 +1252,9 @@ export class GameSession {
         characterDefinitions: Object.fromEntries(this.characterDefinitions),
         maxPropUses: maxPropUsesFor(player),
         countdownSeconds: this.currentCountdownSeconds(),
+        roundInitialSeconds: this.started ? this.clientCountdownSecondsFor(this.currentRoundDurationMs || ROUND_MS) : 0,
+        actionLocked: this.actionLockedPlayerIds.has(player.id),
+        madeInHeavenActive: this.players.some((entry) => entry.characterState.madeInHeaven),
         hints: this.warehouse.getView(player.gameIndex).hint,
       },
     });
@@ -937,6 +1265,10 @@ export class GameSession {
 
   emitCharacterStartHint(player) {
     try {
+      if (player.characterId === "character_15") {
+        this.emitGojoStartHint(player);
+        return;
+      }
       const character = createCharacter(player.characterId, this.characterDefinitions.get(player.characterId));
       const hints = character.onGameStart({
         warehouse: this.warehouse,
@@ -959,6 +1291,10 @@ export class GameSession {
     try {
       if (player.characterId === "character_20") {
         this.emitPucciTargetHint(player);
+        return;
+      }
+      if (player.characterId === "character_15") {
+        this.emitGojoRoundHint(player);
         return;
       }
       const character = createCharacter(player.characterId, this.characterDefinitions.get(player.characterId));
@@ -993,6 +1329,103 @@ export class GameSession {
     this.send(player, characterTextHint(text, this.characterDefinitions.get(player.characterId)?.image));
   }
 
+  emitGojoStartHint(player) {
+    player.characterState.gojoMode = "blue";
+    player.characterState.gojoPurpleTriggered = false;
+    const view = this.warehouse.getView(player.gameIndex);
+    const candidates = realItemEntries(this.warehouse)
+      .filter(({ item }) => item.rarity === "blue" && !itemFullInfoKnown(view, item))
+      .map(({ index }) => index);
+    const [itemIndex] = sample(candidates, 1, this.random);
+    const message = itemIndex ? [this.warehouse.addHint(player.gameIndex, { type: "item_full", itemIndex })] : [];
+    this.send(player, {
+      type: "hint",
+      title: "\u89d2\u8272\u6280\u80fd",
+      text: "开局显示一件蓝色品质战利品，并进入【苍】阶段。",
+      icon: this.characterDefinitions.get(player.characterId)?.image || "",
+      show: message.length > 0,
+      message,
+    });
+  }
+
+  emitGojoRoundHint(player) {
+    if (!player.characterState.gojoMode) player.characterState.gojoMode = "blue";
+    const previousRoundIndex = this.round - 2;
+    if (previousRoundIndex < 0) return;
+    const ownBid = player.bids[previousRoundIndex] || 0;
+    const allBids = this.players.map((entry) => entry.bids[previousRoundIndex] || 0);
+    const view = this.warehouse.getView(player.gameIndex);
+    const mode = player.characterState.gojoMode;
+
+    if (mode === "blue" && ownBid === Math.max(...allBids)) {
+      const knownFull = realItemEntries(this.warehouse).filter(({ item }) => itemFullInfoKnown(view, item));
+      const adjacent = new Set();
+      for (const { index } of knownFull) {
+        for (const neighbor of this.neighborItemIndexes(index)) {
+          const item = this.warehouse.getItemByIndex(neighbor);
+          if (item && !itemFullInfoKnown(view, item)) adjacent.add(neighbor);
+        }
+      }
+      const message = [...adjacent].map((itemIndex) => this.warehouse.addHint(player.gameIndex, { type: "item_full", itemIndex }));
+      player.characterState.gojoMode = "red";
+      this.send(player, {
+        type: "hint",
+        title: "\u89d2\u8272\u6280\u80fd",
+        text: "【苍】效果触发，显示所有与完全已知战利品相邻的战利品，并进入【赫】阶段。",
+        icon: this.characterDefinitions.get(player.characterId)?.image || "",
+        show: message.length > 0,
+        message,
+      });
+      return;
+    }
+
+    if (mode === "red" && ownBid === Math.min(...allBids)) {
+      const itemIndex = this.pickGojoRedTarget(view);
+      const message = itemIndex ? [this.warehouse.addHint(player.gameIndex, { type: "item_full", itemIndex })] : [];
+      player.characterState.gojoMode = "purple";
+      this.send(player, {
+        type: "hint",
+        title: "\u89d2\u8272\u6280\u80fd",
+        text: "【赫】效果触发，随机显示一件高品质战利品，并进入【茈】阶段。",
+        icon: this.characterDefinitions.get(player.characterId)?.image || "",
+        show: message.length > 0,
+        message,
+      });
+      return;
+    }
+
+    if (mode === "purple" && ownBid === Math.max(...allBids)) {
+      const indexes = new Set();
+      const purple = realItemEntries(this.warehouse).filter(({ item }) => item.rarity === "purple");
+      for (const { index } of purple) {
+        indexes.add(index);
+        for (const neighbor of this.neighborItemIndexes(index)) indexes.add(neighbor);
+      }
+      const message = [...indexes]
+        .filter((itemIndex) => !itemFullInfoKnown(view, this.warehouse.getItemByIndex(itemIndex)))
+        .map((itemIndex) => this.warehouse.addHint(player.gameIndex, { type: "item_full", itemIndex }));
+      player.characterState.gojoPurpleTriggered = true;
+      this.send(player, {
+        type: "hint",
+        title: "\u89d2\u8272\u6280\u80fd",
+        text: "【茈】效果触发，显示所有紫色品质战利品以及与它们相邻的战利品。",
+        icon: this.characterDefinitions.get(player.characterId)?.image || "",
+        show: message.length > 0,
+        message,
+      });
+    }
+  }
+
+  pickGojoRedTarget(view) {
+    for (const rarity of ["red", "gold", "purple", "blue", "green", "gray"]) {
+      const candidates = realItemEntries(this.warehouse)
+        .filter(({ item }) => item.rarity === rarity && !itemFullInfoKnown(view, item))
+        .map(({ index }) => index);
+      if (candidates.length) return sample(candidates, 1, this.random)[0];
+    }
+    return null;
+  }
+
   sendCharacterHints(player, hints) {
     for (const hint of [hints].flat().filter(Boolean)) {
       hint.icon = this.characterDefinitions.get(player.characterId)?.image || "";
@@ -1007,29 +1440,23 @@ export class GameSession {
       bid: Math.ceil((player.bids[roundIndex] || 0) * this.bidMultiplierFor(player, roundIndex)),
     }));
     bids.sort((a, b) => b.bid - a.bid);
-    const first = bids[0];
-    const second = bids[1] || { bid: 0 };
-    if (!first || first.bid <= 0) return { finished: roundIndex === ROUND_COUNT - 1, winnerId: null };
-
-    const tied = bids.filter((entry) => entry.bid === first.bid).length > 1;
     const ratio = WIN_RATIOS[roundIndex];
-    if (tied) return { finished: roundIndex === ROUND_COUNT - 1, winnerId: null };
-    const globalPassed = roundIndex === ROUND_COUNT - 1 || (second.bid === 0 ? first.bid > 0 : first.bid > second.bid * ratio);
-    const pairPassed = bids
-      .filter((entry) => entry.player.id !== first.player.id)
-      .every((opponent) => {
-        const candidateAdvantage = this.advantages.get(first.player.id, opponent.player.id);
-        const opponentAdvantage = this.advantages.get(opponent.player.id, first.player.id);
-        const required = requiredPairRatio(ratio, candidateAdvantage, opponentAdvantage);
-        return first.bid > opponent.bid * required;
-      });
-    const thresholdPassed = globalPassed && pairPassed;
-    return { finished: thresholdPassed, winnerId: thresholdPassed ? first.player.id : null };
+    const winners = bids.filter((candidate) => candidate.bid > 0 && bids.every((opponent) => {
+      if (opponent.player.id === candidate.player.id) return true;
+      const candidateAdvantage = this.advantages.get(candidate.player.id, opponent.player.id);
+      const opponentAdvantage = this.advantages.get(opponent.player.id, candidate.player.id);
+      const required = requiredPairRatio(ratio, candidateAdvantage, opponentAdvantage);
+      return candidate.bid > opponent.bid * required;
+    }));
+    if (winners.length !== 1) return { finished: roundIndex === ROUND_COUNT - 1, winnerId: null };
+    return { finished: true, winnerId: winners[0].player.id };
   }
 
   bidMultiplierFor(player, roundIndex) {
     let multiplier = 1;
     if (player.characterState.madeInHeaven) multiplier *= 1.3;
+    if (player.characterState.reinerTransformed) multiplier *= Math.max(0, 1.6 - (roundIndex + 1) / 10);
+    if (player.characterState.domainBidMultiplier?.[roundIndex]) multiplier *= Number(player.characterState.domainBidMultiplier[roundIndex]) || 1;
     if (player.characterId === "character_19") {
       for (const raidCap of this.players) {
         const omen = Number(raidCap.characterState?.omenActive?.[player.id] || 0);
@@ -1201,13 +1628,17 @@ function publicPlayer(player) {
   const visibleRoundBids = player.bids.map((bid, index) => (index < activeRoundIndex ? (bid == null ? null : bid) : null));
   const lastVisibleBid = [...visibleRoundBids].reverse().find((bid) => bid != null) || 0;
   const visibleUsedProps = player.usedProps.map((prop, index) => (index < activeRoundIndex ? prop : null));
+  let characterImageOverride = "";
+  if (player.characterId === "character_21" && player.characterState.megumiMode === "makora") characterImageOverride = "/resource/characters/Makora.png";
+  if (player.characterId === "character_22" && player.characterState.reinerTransformed) characterImageOverride = "/resource/characters/ArmoredTitan.png";
   return {
     id: player.id,
     nickname: player.nickname,
     title: player.title || "",
     characterId: player.characterId,
     characterName: player.characterId,
-    characterImageOverride: player.characterId === "character_21" && player.characterState.megumiMode === "makora" ? "/resource/characters/Makora.png" : "",
+    characterImageOverride,
+    reinerTransformed: Boolean(player.characterState.reinerTransformed),
     money: player.profile.money,
     disconnected: player.disconnected,
     lastBid: lastVisibleBid,
@@ -1276,6 +1707,10 @@ function sample(items, count, random) {
     [result[i], result[j]] = [result[j], result[i]];
   }
   return result.slice(0, count);
+}
+
+function realItemEntries(warehouse) {
+  return warehouse.items.map((item, index) => ({ item, index })).filter(({ item, index }) => index > 0 && item?.id !== 0);
 }
 
 function itemCells(item) {

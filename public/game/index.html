@@ -21,6 +21,10 @@
         <button type="button" id="predictButton" title="Makora 出价预测" hidden>
           <img src="/resource/wheel.png" alt="" />
         </button>
+        <button type="button" id="transformButton" title="Reiner Transform" hidden>
+          <span id="transformCountdown">0</span>
+          <img src="/resource/transform.webp" alt="" />
+        </button>
         <button type="button" id="bidButton">出价</button>
       </section>
 
@@ -83,7 +87,7 @@
     <section class="bid-panel" id="bidPanel" hidden>
       <div class="keypad">
         <button data-key="1">1</button><button data-key="2">2</button><button data-key="3">3</button><button data-action="back">⌫</button>
-        <button data-key="4">4</button><button data-key="5">5</button><button data-key="6">6</button><button data-action="ratio" id="ratioButton">x2.0</button>
+        <button data-key="4">4</button><button data-key="5">5</button><button data-key="6">6</button><div class="ratio-buttons"><button data-action="ratio" id="ratioButton">x2.0</button><button data-action="divide-ratio" id="divideRatioButton">/2.0</button></div>
         <button data-key="7">7</button><button data-key="8">8</button><button data-key="9">9</button><button data-action="last">上轮出价</button>
         <button data-key="0">0</button><button data-key="00">00</button><button data-key="000">000</button><button data-action="clear">归零</button>
       </div>
