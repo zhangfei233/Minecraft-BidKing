@@ -821,6 +821,38 @@ dialog {
   overflow: hidden;
 }
 
+.animation-loading {
+  width: 100vw;
+  height: 100vh;
+  background: #05080a;
+  color: #f2f7fb;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  font-size: 18px;
+  letter-spacing: 0;
+}
+
+.animation-loading::before {
+  content: "";
+  width: 42px;
+  height: 42px;
+  border: 3px solid rgba(255, 255, 255, 0.2);
+  border-top-color: #fff3a0;
+  border-radius: 50%;
+  animation: animationLoadingSpin 0.9s linear infinite;
+}
+
+.animation-loading strong {
+  font-size: 24px;
+}
+
+.animation-loading span {
+  color: rgba(242, 247, 251, 0.74);
+}
+
 .webp-center-stage {
   width: 100vw;
   height: 100vh;
@@ -905,6 +937,12 @@ dialog {
   left: 50%;
   transform: translateX(calc(-50% + 100vw));
   animation: duelRightIn 5s ease-in-out forwards;
+}
+
+@keyframes animationLoadingSpin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 @keyframes animationSlideInStayOut {

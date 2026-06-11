@@ -61,6 +61,9 @@ const animationDurations = { 1: 13.92, 2: 9.2, 3: 12, 4: 3.5, 5: 2, 6: 8.75, 7: 
 const animationImageCache = new Map();
 const animationAudioCache = new Map();
 const animationPreloadPromises = new Map();
+const animationPreloadLinks = new Set();
+const animationAssetUrlCache = new Map();
+const animationAssetFetchPromises = new Map();
 
 for (const [name, ext] of [["click", "mp3"], ["chest", "mp3"], ["orb", "mp3"], ["firework", "mp3"], ["splash", "ogg"], ["bell", "ogg"]]) preloadSound(name, ext);
 
@@ -747,48 +750,66 @@ function showTimedOverlay(text, seconds) {
 }
 
 async function playSingleAnimation(id, durationSeconds) {
-  await ensureAnimationReady(id);
   stopCurrentAnimation();
   const overlay = createAnimationOverlay();
+  showAnimationLoading(overlay, id);
   if (id === 1 || id === 2 || id === 3 || id === 6 || id === 8 || id === 9) {
     const className = id >= 6 ? "centered-webp" : "fullscreen-animation";
-    overlay.innerHTML = `<div class="webp-center-stage"><img class="${className}" src="${animationImageSrc(id)}" alt="" /></div>`;
-    playAnimationAudio(id);
+    const [img, audio] = await Promise.all([
+      createLoadedAnimationImage(animationImageSrc(id), className),
+      createReadyAnimationAudio(id),
+    ]);
+    overlay.innerHTML = `<div class="webp-center-stage"></div>`;
+    overlay.querySelector(".webp-center-stage").appendChild(img);
+    await startPreparedAnimationAudio(audio);
     return wait(durationSeconds * 1000);
   }
   if (id === 7) {
-    overlay.innerHTML = `<img class="slide-image-from-left" src="${animationImageSrc(7)}" alt="" />`;
-    const img = overlay.querySelector("img");
-    img.addEventListener("load", () => {
-      const imageWidth = window.innerHeight * (img.naturalWidth / img.naturalHeight || 1);
-      img.style.setProperty("--image-width", `${imageWidth}px`);
-    }, { once: true });
-    playAnimationAudio(id);
+    const [img, audio] = await Promise.all([
+      createLoadedAnimationImage(animationImageSrc(7), "slide-image-from-left"),
+      createReadyAnimationAudio(id),
+    ]);
+    const imageWidth = window.innerHeight * (img.naturalWidth / img.naturalHeight || 1);
+    img.style.setProperty("--image-width", `${imageWidth}px`);
+    overlay.replaceChildren(img);
+    await startPreparedAnimationAudio(audio);
     return wait(durationSeconds * 1000);
   }
   if (id === 10) {
-    overlay.innerHTML = `
-      <div class="duel-stage">
-        <img class="duel-piece duel-left" src="${animationImageSrc("10_1")}" alt="" />
-        <img class="duel-piece duel-right" src="${animationImageSrc("10_2")}" alt="" />
-      </div>
-    `;
-    playAnimationAudio(id);
+    const [leftImg, rightImg, audio] = await Promise.all([
+      createLoadedAnimationImage(animationImageSrc("10_1"), "duel-piece duel-left"),
+      createLoadedAnimationImage(animationImageSrc("10_2"), "duel-piece duel-right"),
+      createReadyAnimationAudio(id),
+    ]);
+    const stage = document.createElement("div");
+    stage.className = "duel-stage";
+    stage.append(leftImg, rightImg);
+    overlay.replaceChildren(stage);
+    await startPreparedAnimationAudio(audio);
     return wait(durationSeconds * 1000);
   }
   if (id === 4) {
-    overlay.innerHTML = `<div class="animation-dim-layer"></div><img class="slide-animation-image" src="${animationImageSrc(4)}" alt="" />`;
-    const img = overlay.querySelector("img");
-    img.addEventListener("load", () => {
-      const imageWidth = window.innerHeight * (img.naturalWidth / img.naturalHeight || 1);
-      img.style.setProperty("--image-width", `${imageWidth}px`);
-    }, { once: true });
-    playAnimationAudio(id);
+    const [img, audio] = await Promise.all([
+      createLoadedAnimationImage(animationImageSrc(4), "slide-animation-image"),
+      createReadyAnimationAudio(id),
+    ]);
+    const imageWidth = window.innerHeight * (img.naturalWidth / img.naturalHeight || 1);
+    img.style.setProperty("--image-width", `${imageWidth}px`);
+    const dim = document.createElement("div");
+    dim.className = "animation-dim-layer";
+    overlay.replaceChildren(dim, img);
+    await startPreparedAnimationAudio(audio);
     return wait(durationSeconds * 1000);
   }
   if (id === 5) {
-    overlay.innerHTML = `<div class="animation-dim-layer"></div><img class="fade-center-animation-image" src="${animationImageSrc(5)}" alt="" />`;
-    setTimeout(() => currentAnimationOverlay === overlay && playAnimationAudio(id), 500);
+    const [img, audio] = await Promise.all([
+      createLoadedAnimationImage(animationImageSrc(5), "fade-center-animation-image"),
+      createReadyAnimationAudio(id),
+    ]);
+    const dim = document.createElement("div");
+    dim.className = "animation-dim-layer";
+    overlay.replaceChildren(dim, img);
+    setTimeout(() => currentAnimationOverlay === overlay && startPreparedAnimationAudio(audio), 500);
     return wait(durationSeconds * 1000);
   }
   return wait(durationSeconds * 1000);
@@ -803,12 +824,92 @@ function createAnimationOverlay() {
   return overlay;
 }
 
-function playAnimationAudio(id) {
-  const cached = animationAudioCache.get(id);
-  currentAnimationAudio = cached ? cached.cloneNode(true) : new Audio(animationAudioSrc(id));
-  currentAnimationAudio.preload = "auto";
+function showAnimationLoading(overlay, id) {
+  overlay.innerHTML = `
+    <div class="animation-loading">
+      <strong>动画加载中</strong>
+      <span>正在准备动画 ${escapeHtml(String(id))}</span>
+    </div>
+  `;
+}
+
+async function createLoadedAnimationImage(src, className) {
+  const playableSrc = await getAnimationAssetUrl(src);
+  addPreloadLink(src, "image");
+  return new Promise((resolve, reject) => {
+    const img = buildAnimationImage(className);
+    let done = false;
+    const timeout = setTimeout(() => {
+      if (done) return;
+      done = true;
+      reject(new Error(`Animation image timed out: ${src}`));
+    }, 30000);
+    const finish = () => {
+      if (done) return;
+      done = true;
+      clearTimeout(timeout);
+      animationImageCache.set(src, img);
+      if (typeof img.decode === "function") img.decode().then(() => resolve(img)).catch(() => resolve(img));
+      else resolve(img);
+    };
+    img.addEventListener("load", () => {
+      finish();
+    }, { once: true });
+    img.addEventListener("error", () => {
+      if (done) return;
+      done = true;
+      clearTimeout(timeout);
+      reject(new Error(`Animation image failed: ${src}`));
+    }, { once: true });
+    img.src = playableSrc;
+    if (img.complete && img.naturalWidth > 0) finish();
+  });
+}
+
+function buildAnimationImage(className) {
+  const img = new Image();
+  img.className = className;
+  img.alt = "";
+  img.decoding = "async";
+  img.loading = "eager";
+  return img;
+}
+
+async function createReadyAnimationAudio(id) {
+  const src = animationAudioSrc(id);
+  const playableSrc = await getAnimationAssetUrl(src);
+  addPreloadLink(src, "audio");
+  return new Promise((resolve) => {
+    const audio = new Audio(playableSrc);
+    audio.preload = "auto";
+    audio.playsInline = true;
+    const finish = () => resolve(audio);
+    const timeout = setTimeout(finish, 12000);
+    audio.addEventListener("canplaythrough", () => {
+      clearTimeout(timeout);
+      finish();
+    }, { once: true });
+    audio.addEventListener("loadeddata", () => {
+      clearTimeout(timeout);
+      finish();
+    }, { once: true });
+    audio.addEventListener("error", () => {
+      clearTimeout(timeout);
+      finish();
+    }, { once: true });
+    audio.load();
+  });
+}
+
+async function startPreparedAnimationAudio(audio) {
+  currentAnimationAudio = audio;
   currentAnimationAudio.currentTime = 0;
-  currentAnimationAudio.play().catch(() => {});
+  try {
+    await currentAnimationAudio.play();
+  } catch {
+    await wait(120);
+    if (currentAnimationAudio === audio) currentAnimationAudio.play().catch(() => {});
+  }
 }
 
 function preloadAnimations(animations) {
@@ -823,6 +924,7 @@ function ensureAnimationReady(id) {
 function preloadAnimation(id) {
   const key = Number(id);
   if (animationPreloadPromises.has(key)) return animationPreloadPromises.get(key);
+  addAnimationPreloadLinks(key);
   const promise = Promise.all([
     ...animationImageSources(key).map((src) => preloadAnimationImage(src)),
     preloadAnimationAudio(key),
@@ -831,7 +933,9 @@ function preloadAnimation(id) {
   return promise;
 }
 
-function preloadAnimationImage(src) {
+async function preloadAnimationImage(src) {
+  addPreloadLink(src, "image");
+  const playableSrc = await getAnimationAssetUrl(src);
   const existing = animationImageCache.get(src);
   if (existing?.complete && existing.naturalWidth > 0) return Promise.resolve(existing);
   return new Promise((resolve) => {
@@ -850,7 +954,7 @@ function preloadAnimationImage(src) {
       clearTimeout(timeout);
       resolve(img);
     }, { once: true });
-    if (!img.src) img.src = src;
+    if (!img.src) img.src = playableSrc;
     else if (img.complete) {
       clearTimeout(timeout);
       finish();
@@ -858,13 +962,16 @@ function preloadAnimationImage(src) {
   });
 }
 
-function preloadAnimationAudio(id) {
-  const existing = animationAudioCache.get(id);
+async function preloadAnimationAudio(id) {
+  const src = animationAudioSrc(id);
+  addPreloadLink(src, "audio");
+  const playableSrc = await getAnimationAssetUrl(src);
+  const existing = animationAudioCache.get(src);
   if (existing && existing.readyState >= HTMLMediaElement.HAVE_FUTURE_DATA) return Promise.resolve(existing);
   return new Promise((resolve) => {
-    const audio = existing || new Audio(animationAudioSrc(id));
+    const audio = existing || new Audio(playableSrc);
     audio.preload = "auto";
-    animationAudioCache.set(id, audio);
+    animationAudioCache.set(src, audio);
     const finish = () => resolve(audio);
     const timeout = setTimeout(finish, 8000);
     audio.addEventListener("canplaythrough", () => {
@@ -881,6 +988,42 @@ function preloadAnimationAudio(id) {
     }, { once: true });
     audio.load();
   });
+}
+
+function getAnimationAssetUrl(src) {
+  if (animationAssetUrlCache.has(src)) return Promise.resolve(animationAssetUrlCache.get(src));
+  if (animationAssetFetchPromises.has(src)) return animationAssetFetchPromises.get(src);
+  const promise = fetch(src, { cache: "force-cache" })
+    .then((response) => {
+      if (!response.ok) throw new Error(`Animation asset fetch failed: ${src}`);
+      return response.blob();
+    })
+    .then((blob) => {
+      const objectUrl = URL.createObjectURL(blob);
+      animationAssetUrlCache.set(src, objectUrl);
+      return objectUrl;
+    })
+    .catch(() => src);
+  animationAssetFetchPromises.set(src, promise);
+  return promise;
+}
+
+function addAnimationPreloadLinks(id) {
+  for (const src of animationImageSources(id)) addPreloadLink(src, "image");
+  addPreloadLink(animationAudioSrc(id), "audio");
+}
+
+function addPreloadLink(src, asType) {
+  const key = `${asType}:${src}`;
+  if (animationPreloadLinks.has(key)) return;
+  animationPreloadLinks.add(key);
+  const link = document.createElement("link");
+  link.rel = "preload";
+  link.as = asType;
+  link.href = src;
+  if (asType === "audio") link.type = "audio/mpeg";
+  if (asType === "image") link.type = "image/webp";
+  document.head.appendChild(link);
 }
 
 function animationImageSrc(id) {
