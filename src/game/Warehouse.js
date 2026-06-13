@@ -184,7 +184,7 @@ export class Warehouse {
     let freeRects = [{ x: 0, y: 0, width: Warehouse.WIDTH, height: Warehouse.MAX_ROWS }];
     let placed = 0;
     const randomCount = randomizeLarge ? Math.max(1, Math.ceil(candidates.length * 0.1)) : 0;
-    const randomCandidates = shuffle(candidates.slice(0, randomCount), this.random);
+    const randomCandidates = spreadHighRarityItems(shuffle(candidates.slice(0, randomCount), this.random));
     const remaining = candidates.slice(randomCount);
 
     for (const definition of randomCandidates) {
@@ -203,7 +203,8 @@ export class Warehouse {
       placed += 1;
     }
 
-    for (const definition of remaining.sort((a, b) => b.width * b.height - a.width * a.height)) {
+    const remainingQueue = spreadHighRarityItems(remaining.sort((a, b) => b.width * b.height - a.width * a.height));
+    for (const definition of remainingQueue) {
       const placement = findBestMaxRect(definition, freeRects);
       if (!placement) continue;
       const item = this.placeDefinition(definition, placement);
@@ -386,6 +387,29 @@ function shuffle(items, random) {
     const j = Math.floor(random() * (i + 1));
     [result[i], result[j]] = [result[j], result[i]];
   }
+  return result;
+}
+
+function spreadHighRarityItems(items) {
+  const high = [];
+  const normal = [];
+  for (const item of items) {
+    if (item.rarity === "gold" || item.rarity === "red") high.push(item);
+    else normal.push(item);
+  }
+  if (high.length <= 1 || normal.length === 0) return [...items];
+
+  const slots = Array.from({ length: normal.length + 1 }, () => []);
+  high.forEach((item, index) => {
+    const slotIndex = Math.min(normal.length, Math.floor(((index + 1) * (normal.length + 1)) / (high.length + 1)));
+    slots[slotIndex].push(item);
+  });
+
+  const result = [];
+  for (let index = 0; index < normal.length; index += 1) {
+    result.push(...slots[index], normal[index]);
+  }
+  result.push(...slots[normal.length]);
   return result;
 }
 

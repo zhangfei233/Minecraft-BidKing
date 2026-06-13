@@ -10,7 +10,8 @@ export function loadAchievements(rootDir) {
     : Object.entries(raw || {}).map(([id, value]) => ({ id, ...(typeof value === "object" ? value : { description: String(value) }) }));
   return entries.map((entry, index) => {
     const id = String(entry.id ?? entry.achievement_id ?? index + 1);
-    const goal = Math.max(1, Math.floor(Number(entry.goal ?? entry.target ?? entry.count ?? 1) || 1));
+    const defaultGoal = id === "19" ? 10 : 1;
+    const goal = Math.max(1, Math.floor(Number(entry.goal ?? entry.target ?? entry.count ?? defaultGoal) || defaultGoal));
     return {
       ...entry,
       id,

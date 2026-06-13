@@ -705,10 +705,11 @@ export function createRoom({ rootDir, onGameStart }) {
     let total = 0;
     for (const page of player.profile.production.pages) {
       if (!page.open) continue;
-      for (const slot of page.slots) {
+      for (const slot of page.slots || []) {
+        slot.outputs = Array.isArray(slot.outputs) ? slot.outputs : [];
         for (let outputIndex = 0; outputIndex < slot.outputs.length; outputIndex += 1) {
           const output = slot.outputs[outputIndex];
-          if (!output) continue;
+          if (!output || Number(output.count || 0) <= 0) continue;
           const item = itemsById.get(output.id);
           if (!item) continue;
           const entry = { id: output.id, name: item.name, count: output.count, subtotal: 0 };
@@ -724,6 +725,7 @@ export function createRoom({ rootDir, onGameStart }) {
       }
     }
     if (mode === "sell" && total > 0) addMoney(player.profile, total);
+    player.profile.production = normalizeProductionState(player.profile.production);
     return { mode, handled, total, money: player.profile.money };
   }
 

@@ -102,7 +102,7 @@ class RevealAllMultiblockOutlineProp extends Prop {
   use({ warehouse, viewNumber, view }) {
     const indexes = warehouse.items
       .map((item, index) => ({ item, index }))
-      .filter(({ item, index }) => index > 0 && Number(item.width || 0) * Number(item.height || 0) > 1 && !itemOutlineKnown(view, item))
+      .filter(({ item, index }) => index > 0 && splitTypes(item.type).includes("multiblock") && !itemOutlineKnown(view, item))
       .map(({ index }) => index);
     const message = indexes.map((itemIndex) => warehouse.addHint(viewNumber, { type: "item_outline", itemIndex }));
     return this.package(this.description || "\u663e\u793a\u6240\u6709\u591a\u65b9\u5757\u7c7b\u6218\u5229\u54c1\u7684\u8f6e\u5ed3", message);
@@ -158,6 +158,27 @@ class RevealAllFullProp extends Prop {
   }
 }
 
+class RevealDecorationFullProp extends Prop {
+  constructor(definition, level, maxCells = null) {
+    super(definition, level);
+    this.maxCells = maxCells;
+  }
+
+  use({ warehouse, viewNumber, view }) {
+    const indexes = warehouse.items
+      .map((item, index) => ({ item, index }))
+      .filter(({ item, index }) => (
+        index > 0
+        && splitTypes(item.type).includes("decoration")
+        && (this.maxCells == null || Number(item.width || 0) * Number(item.height || 0) <= this.maxCells)
+        && !itemFullInfoKnown(view, item)
+      ))
+      .map(({ index }) => index);
+    const message = indexes.map((itemIndex) => warehouse.addHint(viewNumber, { type: "item_full", itemIndex }));
+    return this.package(this.description || "\u663e\u793a\u88c5\u9970\u7c7b\u6218\u5229\u54c1", message);
+  }
+}
+
 export function createProp(id, definition = {}, level = 1) {
   const map = {
     prop_1: () => new RevealOneItemProp(definition, level),
@@ -166,10 +187,10 @@ export function createProp(id, definition = {}, level = 1) {
     prop_4: () => new RevealOutlineProp(definition, level, 7),
     prop_5: () => new RevealOutlineProp(definition, level, 9),
     prop_6: () => new RevealOutlineProp(definition, level, 11),
-    prop_7: () => new RevealTypeOutlineRarityProp(definition, level, ["natural"], 2),
-    prop_8: () => new RevealTypeOutlineRarityProp(definition, level, ["ore"], 2),
-    prop_9: () => new RevealTypeOutlineRarityProp(definition, level, ["tech"], 2),
-    prop_10: () => new RevealTypeOutlineRarityProp(definition, level, ["magic"], 2),
+    prop_7: () => new RevealTypeOutlineRarityProp(definition, level, ["natural"], 3),
+    prop_8: () => new RevealTypeOutlineRarityProp(definition, level, ["ore"], 3),
+    prop_9: () => new RevealTypeOutlineRarityProp(definition, level, ["tech"], 3),
+    prop_10: () => new RevealTypeOutlineRarityProp(definition, level, ["magic"], 3),
     prop_11: () => new RevealAllMultiblockOutlineProp(definition, level),
     prop_12: () => new RevealRarityProp(definition, level, 5),
     prop_13: () => new RevealRarityProp(definition, level, 3),
@@ -191,6 +212,9 @@ export function createProp(id, definition = {}, level = 1) {
     prop_29: () => new RevealRarityOutlineProp(definition, level, "red"),
     prop_30: () => new RevealAllOutlineRarityProp(definition, level),
     prop_31: () => new RevealAllFullProp(definition, level),
+    prop_32: () => new RevealDecorationFullProp(definition, level, 2),
+    prop_33: () => new RevealDecorationFullProp(definition, level, 4),
+    prop_34: () => new RevealDecorationFullProp(definition, level),
   };
   return (map[id] || map.prop_1)();
 }

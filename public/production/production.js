@@ -31,7 +31,10 @@ document.querySelector("#backButton").addEventListener("click", () => backToRoom
 document.querySelector("#buyPageButton").addEventListener("click", () => socket?.send(JSON.stringify({ type: "production_buy_page" })));
 document.querySelector("#collectAllButton").addEventListener("click", () => socket?.send(JSON.stringify({ type: "production_collect_all", mode: "take" })));
 document.querySelector("#sellAllOutputsButton").addEventListener("click", () => socket?.send(JSON.stringify({ type: "production_collect_all", mode: "sell" })));
-document.querySelector("#favoriteProductionButton").addEventListener("click", () => socket?.send(JSON.stringify({ type: "production_favorite_inputs" })));
+document.querySelector("#favoriteProductionButton").addEventListener("click", () => {
+  socket?.send(JSON.stringify({ type: "production_favorite_inputs" }));
+  alert("已收藏所有生产配方需求物品");
+});
 document.querySelector("#recipeSearchButton").addEventListener("click", () => {
   picker.search = recipeSearchInput.value.trim();
   picker.page = 1;

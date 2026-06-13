@@ -65,7 +65,10 @@ function render() {
       </footer>
     </section>
   `;
-  document.querySelector("#favoriteLotteryButton").addEventListener("click", () => socket?.send(JSON.stringify({ type: "lottery_favorite_consumes" })));
+  document.querySelector("#favoriteLotteryButton").addEventListener("click", () => {
+    socket?.send(JSON.stringify({ type: "lottery_favorite_consumes" }));
+    alert("已收藏所有抽奖道具");
+  });
   document.querySelector("#drawLotteryButton").addEventListener("click", () => socket?.send(JSON.stringify({ type: "lottery_draw" })));
   document.querySelector("#refillLotteryButton").addEventListener("click", () => socket?.send(JSON.stringify({ type: "lottery_refill" })));
   document.querySelector("#takeLotteryButton").addEventListener("click", () => socket?.send(JSON.stringify({ type: "lottery_collect", mode: "take" })));

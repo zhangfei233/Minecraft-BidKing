@@ -5,11 +5,11 @@ prop_3,硬质望远镜,随机显示5件战利品的轮廓,3,20000,/resource/prop
 prop_4,强化望远镜,随机显示7件战利品的轮廓,4,30000,/resource/props/prop_4.png
 prop_5,信素望远镜,随机显示9件战利品的轮廓,5,50000,/resource/props/prop_5.png
 prop_6,谐振望远镜,随机显示11件战利品的轮廓,6,70000,/resource/props/prop_6.png
-prop_7,自然模块,随机显示2件自然类战利品的轮廓和品质,3,30000,/resource/props/prop_7.png
-prop_8,宝石模块,随机显示2件矿物类战利品的轮廓和品质,3,30000,/resource/props/prop_8.png
-prop_9,信号检测仪,随机显示2件科技类战利品的轮廓和品质,3,30000,/resource/props/prop_9.png
+prop_7,自然模块,随机显示3件自然类战利品的轮廓和品质,3,30000,/resource/props/prop_7.png
+prop_8,宝石模块,随机显示3件矿物类战利品的轮廓和品质,3,30000,/resource/props/prop_8.png
+prop_9,信号检测仪,随机显示3件科技类战利品的轮廓和品质,3,30000,/resource/props/prop_9.png
 prop_11,迷你挖掘机,显示所有多方块类战利品的轮廓,5,80000,/resource/props/prop_11.png
-prop_10,魔法球,随机显示2件魔法类战利品的轮廓和品质,3,30000,/resource/props/prop_10.png
+prop_10,魔法球,随机显示3件魔法类战利品的轮廓和品质,3,30000,/resource/props/prop_10.png
 prop_12,高级笔记,随机显示5件战利品的品质,4,40000,/resource/props/prop_12.png
 prop_13,学徒笔记,随机显示3件战利品的品质,2,20000,/resource/props/prop_13.png
 prop_14,古代笔记,随机显示6件战利品的品质,5,50000,/resource/props/prop_14.png
@@ -30,3 +30,6 @@ prop_28,红色透镜I,随机显示1件红色稀有度战利品的轮廓(不足�
 prop_29,红色透镜II,显示全部红色稀有度战利品的轮廓(没有则向下顺延),6,150000,/resource/props/prop_29.png
 prop_30,七彩透镜,显示全部战利品的稀有度和轮廓,6,500000,/resource/props/prop_30.png
 prop_31,电子扫描仪,显示全部物品,6,1000000,/resource/props/prop_31.png
+prop_32,凿子,显示占格数不超过2的装饰类战利品,3,30000,/resource/props/prop_32.png
+prop_33,钻石凿子,显示占格数为不超过4的装饰类战利品,4,50000,/resource/props/prop_33.png
+prop_34,黑曜石凿子,显示所有装饰类战利品,5,70000,/resource/props/prop_34.png

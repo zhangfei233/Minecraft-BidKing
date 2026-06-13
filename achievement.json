@@ -3,10 +3,20 @@
     "2": {"title":"全知全能", "description":"游戏结束前完全显示了战利品仓的所有物品。","reward":"671"},
     "3": {"title":"极限拿下", "description":"得拍时的出价再减一块钱就不能得拍。","reward":"2463"},
     "4": {"title":"倍率精算师", "description":"依靠倍率得拍。","reward":"259"},
-    "5": {"title":"向南", "description":"以Gojo角色参与第五回合的【无量空处】与【伏魔御厨子】的比拼，最后被用出【伏魔御厨子】的Sukuna玩家得拍。","reward":"738"},
-    "6": {"title":"都说了会赢的", "description":"以Gojo角色参与第五回合的【无量空处】与【伏魔御厨子】的比拼，最后得拍。","reward":"799"},
-    "7": {"title":"信誉分不足", "description":"以Gojo角色参与第五回合的【无量空处】与【伏魔御厨子】的比拼，最后被用出【无量空处】的Gojo玩家得拍。","reward":"738"},
-    "8": {"title":"真令人愉悦啊", "description":"以Sukuna角色参与第五回合的【无量空处】与【伏魔御厨子】的比拼，最后得拍。","reward":"800"},
+    "5": {"title":"向南", "description":"以Gojo参与第五回合的【无量空处】与【伏魔御厨子】的比拼，最后被用出【伏魔御厨子】的Sukuna玩家得拍。","reward":"738"},
+    "6": {"title":"都说了会赢的", "description":"以Gojo参与第五回合的【无量空处】与【伏魔御厨子】的比拼，最后得拍。","reward":"799"},
+    "7": {"title":"信誉分不足", "description":"以Gojo参与第五回合的【无量空处】与【伏魔御厨子】的比拼，最后被用出【无量空处】的Gojo玩家得拍。","reward":"738"},
+    "8": {"title":"真令人愉悦啊", "description":"以Sukuna参与第五回合的【无量空处】与【伏魔御厨子】的比拼，最后得拍。","reward":"800"},
     "9": {"title":"夺得坐标", "description":"使用Reiner参加游戏并在变身当回合得拍且利润为正。","reward":"591"},
-    "10": {"title":"莱纳你坐啊", "description":"使用Reiner参加游戏并得拍，但结算时有超过5件物品被替换成椅子。","reward":"724"}
-}
+    "10": {"title":"莱纳你坐啊", "description":"使用Reiner参加游戏并得拍，但结算时有超过5件物品被替换成椅子。","reward":"724"},
+    "11": {"title":"再怎么说也是领域啊", "description":"使用Megumi参与游戏并选择\"领域展开\",依靠领域带来的倍率得拍。","reward":"2721"},
+    "12": {"title":"我已经适应了", "description":"使用Megumi参加游戏并选择\"跟你爆了\",随后直到游戏结束对某一角色的每次预测都正确。","reward":"2723"},
+    "13": {"title":"不适，哥们", "description":"使用Megumi参加游戏并选择\"跟你爆了\",并在一次都没预测对的情况下得拍","reward":"2724"},
+    "14": {"title":"不拿下也能赚", "description":"使用Quantum参加游戏并在结算时用【复制机】道具的价值之和超过100万。","reward":"2714"},
+    "15": {"title":"诅咒之王", "description":"使用Sukuna开出【伏魔御厨子】并一次性消除至少3件道具。","reward":"2720"},
+    "16": {"title":"闪电苦力怕", "description":"以Creeper参与游戏并在一局内两次使用专属道具【TNT】。","reward":"2720"},
+    "17": {"title":"贫民窟？", "description":"使用Isa参加游戏，技能获取的信息显示的数量为0。","reward":"738"},
+    "18": {"title":"神明的指引", "description":"以Pucci参与游戏并在第一回合触发【天堂制造】。","reward":"2722"},
+    "19": {"title":"抵达天堂", "description":"以Pucci参与游戏并触发【天堂制造】累积10次。","reward":"761"},
+    "20": {"title":"不祥化身", "description":"以RaidCap参与游戏并让一名对手获得20%效果的不祥之兆。","reward":"2722"}
+} 

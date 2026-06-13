@@ -46,14 +46,19 @@ let isReiner = false;
 let reinerTransformed = false;
 let actionLockedThisRound = false;
 let roundInitialSeconds = 60;
+let countdownEndsAt = 0;
 let bellPlayedAt = new Set();
 let animationDepth = 0;
 let queuedMessages = [];
 let currentAnimationOverlay = null;
 let currentAnimationAudio = null;
+let animationRunToken = 0;
+let roundEndAnimationToken = 0;
+let propUsePending = false;
+let activeConfirmResolve = null;
 
 const levelRarities = ["gray", "green", "blue", "purple", "gold", "red"];
-const rarityLabels = { gray: "白", green: "绿", blue: "蓝", purple: "紫", gold: "金", red: "红" };
+const rarityLabels = { gray: "\u767d", green: "\u7eff", blue: "\u84dd", purple: "\u7d2b", gold: "\u91d1", red: "\u7ea2" };
 const rarityColors = { red: "#ff6060", gold: "#faff75", purple: "#964aca", blue: "#7b8afc", green: "#95de93", gray: "#c7c7c7" };
 const selectedSettlementRarities = new Set();
 const audioCache = new Map();
@@ -95,7 +100,7 @@ transformButton?.addEventListener("click", () => {
 document.querySelector("#sellAllLootButton").addEventListener("click", () => socket?.send(JSON.stringify({ type: "settlement_sell", mode: "all" })));
 document.querySelector("#sellUnfavoriteLootButton").addEventListener("click", () => socket?.send(JSON.stringify({ type: "settlement_sell", mode: "unfavorite" })));
 document.querySelector("#sellRarityLootButton").addEventListener("click", () => {
-  if (!selectedSettlementRarities.size) return alert("请至少选择一种品质");
+  if (!selectedSettlementRarities.size) return alert("\u8bf7\u81f3\u5c11\u9009\u62e9\u4e00\u79cd\u54c1\u8d28");
   socket?.send(JSON.stringify({ type: "settlement_sell", mode: "rarity", rarities: [...selectedSettlementRarities] }));
 });
 document.querySelector("#returnRoomButton").addEventListener("click", () => socket?.send(JSON.stringify({ type: "return_room" })));
@@ -118,7 +123,7 @@ canvas.addEventListener("mousemove", (event) => {
     tooltip.hidden = true;
     return;
   }
-  tooltip.innerHTML = `<strong>${escapeHtml(data.name)}</strong><span>${escapeHtml(data.typeLabel)}</span><span>价值 ${formatNumber(data.price)}</span>`;
+  tooltip.innerHTML = `<strong>${escapeHtml(data.name)}</strong><span>${escapeHtml(data.typeLabel)}</span><span>\u4ef7\u503c ${formatNumber(data.price)}</span>`;
   tooltip.style.left = `${event.clientX + 14}px`;
   tooltip.style.top = `${event.clientY + 14}px`;
   tooltip.hidden = false;
@@ -146,6 +151,10 @@ function connectGameSocket() {
 }
 
 function dispatchMessage(message) {
+  if (message.type === "error") {
+    propUsePending = false;
+    updateActionButtons();
+  }
   if (message.type === "game_init") renderInit(message.body);
   if (message.type === "prop_slots") handlePropSlots(message.body);
   if (message.type === "hint") handleHint(message);
@@ -173,7 +182,7 @@ function dispatchMessage(message) {
   if (message.type === "game_over") handleGameOver(message.body);
   if (message.type === "settlement_sell_result") handleSettlementSellResult(message.body);
   if (message.type === "return_room") location.href = message.body?.url || `/room?playerId=${encodeURIComponent(myId)}`;
-  if (message.type === "error") addNotice({ title: "操作失败", text: message.message || "未知错误", show: false, message: [] });
+  if (message.type === "error") addNotice({ title: "\u64cd\u4f5c\u5931\u8d25", text: message.message || "\u672a\u77e5\u9519\u8bef", show: false, message: [] });
 }
 
 function flushQueuedMessages() {
@@ -189,13 +198,15 @@ function renderInit(data) {
   characterDefinitions = data.characterDefinitions || {};
   carriedProps = data.carriedProps || [];
   maxPropUsesThisRound = Number(data.maxPropUses || 1);
+  propUsesThisRound = Number(data.propUses || 0);
+  propUsePending = false;
   currentMoney = Number(data.money || 0);
   gameMoney.textContent = formatNumber(currentMoney);
   currentRound = data.round ?? 1;
   actionLockedThisRound = Boolean(data.actionLocked);
   hasBidThisRound = actionLockedThisRound;
   roundNumber.textContent = currentRound;
-  warehouseTitle.textContent = data.warehouseName || "战利品仓";
+  warehouseTitle.textContent = data.warehouseName || "\u6218\u5229\u54c1\u4ed3";
   noticeList.innerHTML = "";
   renderer.reset();
   if (Array.isArray(data.hints) && data.hints.length) renderer.applyHint({ message: data.hints });
@@ -225,9 +236,10 @@ function renderPlayers(players) {
     <article class="player-card ${player.disconnected ? "is-offline" : ""}">
       <div class="player-top">
         ${renderPlayerAvatar(player)}
-        <div>
-          <div class="player-name">${index + 1} ${escapeHtml(player.nickname)}${player.disconnected ? "（掉线）" : ""}</div>
-          <div class="title">${escapeHtml(player.title || "")}</div>
+        <div class="player-meta">
+          <div class="player-name">${index + 1} ${escapeHtml(player.nickname)}${player.disconnected ? "\uff08\u6389\u7ebf\uff09" : ""}</div>
+          ${renderEffectIcons(player.effectIcons || [])}
+          ${player.title ? `<div class="title">${escapeHtml(player.title)}</div>` : ""}
         </div>
         <div class="last-bid">${renderBidStatus(player)}</div>
       </div>
@@ -236,20 +248,46 @@ function renderPlayers(players) {
       </div>
     </article>
   `).join("");
+  bindEffectIconTooltips();
+}
+
+function renderEffectIcons(icons) {
+  if (!icons.length) return "";
+  return `<span class="effect-icons">${icons.map((icon) => `
+    <span class="effect-icon" data-effect-text="${escapeHtml(icon.text || "")}">
+      <img src="${escapeHtml(icon.icon || "")}" alt="" />
+    </span>
+  `).join("")}</span>`;
+}
+
+function bindEffectIconTooltips() {
+  for (const icon of playersEl.querySelectorAll(".effect-icon")) {
+    icon.addEventListener("mousemove", (event) => {
+      const text = icon.dataset.effectText || "";
+      if (!text) return;
+      tooltip.innerHTML = `<strong>${escapeHtml(text)}</strong>`;
+      tooltip.style.left = `${event.clientX + 14}px`;
+      tooltip.style.top = `${event.clientY + 14}px`;
+      tooltip.hidden = false;
+    });
+    icon.addEventListener("mouseleave", () => {
+      tooltip.hidden = true;
+    });
+  }
 }
 
 function renderRoundSlot(player, round) {
   const bid = player.roundBids?.[round];
   const prop = player.usedProps?.[round];
   const def = prop ? (propDefinitions[prop.id] || {}) : null;
-  const propName = prop ? (def.name || prop.id) : "未使用道具";
-  const title = `${prop ? `${propName} Lv.${def.level || prop.level || 1}` : propName}${bid == null ? "" : `\n准确出价 ${formatNumber(bid)}`}`;
-  return `<div class="round-slot" title="${escapeHtml(title)}"><i style="--prop-bg:${propColor(def)}">${def?.image ? `<img src="${def.image}" alt="" />` : prop ? "道具" : ""}</i><span>${round + 1}</span><small>${bid == null ? "" : shortNumber(bid)}</small></div>`;
+  const propName = prop ? (def.name || prop.id) : "\u672a\u4f7f\u7528\u9053\u5177";
+  const title = `${prop ? `${propName} Lv.${def.level || prop.level || 1}` : propName}${bid == null ? "" : `\n\u51c6\u786e\u51fa\u4ef7 ${formatNumber(bid)}`}`;
+  return `<div class="round-slot" title="${escapeHtml(title)}"><i style="--prop-bg:${propColor(def)}">${def?.image ? `<img src="${def.image}" alt="" />` : prop ? "\u9053\u5177" : ""}</i><span>${round + 1}</span><small>${bid == null ? "" : shortNumber(bid)}</small></div>`;
 }
 
 function renderBidStatus(player) {
   if (showRoundResults && player.lastBid != null) return formatNumber(player.lastBid);
-  if (player.bidPending) return "已出价";
+  if (player.bidPending) return "\u5df2\u51fa\u4ef7";
   return "";
 }
 
@@ -263,34 +301,51 @@ function renderPlayerAvatar(player) {
 
 function openPropDialog() {
   if (hasBidThisRound || actionLockedThisRound || propUsesThisRound >= maxPropUsesThisRound) {
-    addNotice({ title: "操作失败", text: hasBidThisRound ? "出价后不能使用道具" : "本回合已达到道具使用次数上限", show: false, message: [] });
+    addNotice({
+      title: "\u64cd\u4f5c\u5931\u8d25",
+      text: hasBidThisRound ? "\u51fa\u4ef7\u540e\u4e0d\u80fd\u4f7f\u7528\u9053\u5177" : "\u672c\u56de\u5408\u5df2\u8fbe\u5230\u9053\u5177\u4f7f\u7528\u6b21\u6570\u4e0a\u9650",
+      show: false,
+      message: [],
+    });
     return;
   }
   propChoices.innerHTML = carriedProps.map((prop, index) => {
     if (!prop) return "";
     const def = propDefinitions[prop.id] || {};
     const name = def.name || prop.id;
-    const description = def.description || "暂无说明";
+    const description = def.description || "\u6682\u65e0\u8bf4\u660e";
     return `
       <button class="prop-choice" type="button" data-slot="${index}" title="${escapeHtml(description)}" style="--prop-bg:${propColor(def)}">
         ${def.image ? `<img src="${def.image}" alt="${escapeHtml(name)}" />` : "<span></span>"}
-        <span><strong>${escapeHtml(name)} Lv.${prop.level || def.level || 1}</strong><span>${escapeHtml(description)}</span>${prop.temporary ? '<em class="temporary-label">临时</em>' : ""}</span>
-        <span>第${index + 1}格</span>
+        <span><strong>${escapeHtml(name)} Lv.${prop.level || def.level || 1}</strong><span>${escapeHtml(description)}</span>${prop.temporary ? '<em class="temporary-label">\u4e34\u65f6</em>' : ""}</span>
+        <span>\u7b2c${index + 1}\u683c</span>
       </button>
     `;
-  }).join("") || "<p>没有可用道具</p>";
+  }).join("") || "<p>\u6ca1\u6709\u53ef\u7528\u9053\u5177</p>";
   for (const button of propChoices.querySelectorAll(".prop-choice")) {
-    button.addEventListener("click", () => {
+    button.addEventListener("click", async () => {
       const slot = Number(button.dataset.slot);
       const prop = carriedProps[slot];
       const def = propDefinitions[prop.id] || {};
       const name = def.name || prop.id;
-      if (!confirm(`确认使用道具【${name}】吗？\n${def.description || ""}`)) return;
+      if (propDialog.open) propDialog.close();
+      const confirmed = await showConfirmDialog({
+        title: `\u786e\u8ba4\u4f7f\u7528\u9053\u5177\u3010${name}\u3011\u5417\uff1f`,
+        text: def.description || "",
+        confirmText: "\u4f7f\u7528",
+        cancelText: "\u53d6\u6d88",
+      });
+      if (!confirmed) {
+        if (!hasBidThisRound && !actionLockedThisRound && propUsesThisRound < maxPropUsesThisRound && animationDepth === 0) {
+          propDialog.showModal();
+        }
+        return;
+      }
+      if (hasBidThisRound || actionLockedThisRound || animationDepth > 0) return;
       playSound("splash", "ogg");
-      propDialog.close();
       if (requiresTarget(prop.id)) {
         pendingTargetUse = { slot, propId: prop.id };
-        addNotice({ title: "道具目标", text: "请选择一个战利品仓格子", show: false, message: [] });
+        addNotice({ title: "\u9053\u5177\u76ee\u6807", text: "\u8bf7\u9009\u62e9\u4e00\u4e2a\u6218\u5229\u54c1\u4ed3\u683c\u5b50", show: false, message: [] });
       } else {
         sendUseProp(slot);
       }
@@ -300,10 +355,12 @@ function openPropDialog() {
 }
 
 function handleRoundStart(body) {
+  forceEndCurrentAnimation();
   currentRound = body.round;
   actionLockedThisRound = Boolean(body.actionLocked);
   hasBidThisRound = actionLockedThisRound;
   propUsesThisRound = 0;
+  propUsePending = false;
   pendingTargetUse = null;
   predictionAvailable = null;
   predictionSubmittedThisRound = false;
@@ -343,6 +400,16 @@ function handleRoundEnd(body) {
   clearTimeout(roundResultTimer);
   hasBidThisRound = true;
   updateActionButtons();
+  if (Array.isArray(body.players)) {
+    const transientIconsById = new Map(currentPlayers.map((player) => [
+      player.id,
+      (player.effectIcons || []).filter((icon) => icon.transient),
+    ]));
+    currentPlayers = body.players.map((player) => ({
+      ...player,
+      effectIcons: [...(player.effectIcons || []), ...(transientIconsById.get(player.id) || [])],
+    }));
+  }
   for (const bid of body.bids || []) {
     const player = currentPlayers.find((entry) => entry.id === bid.playerId);
     if (!player) continue;
@@ -353,7 +420,14 @@ function handleRoundEnd(body) {
     player.usedProps = player.usedProps || [];
     player.usedProps[body.round - 1] = bid.usedProp;
   }
+  addTransientEffectIcons(body.effectIconsByPlayer || {});
   renderPlayers(currentPlayers);
+  if (Object.keys(body.effectIconsByPlayer || {}).length) {
+    setTimeout(() => {
+      clearTransientEffectIcons();
+      renderPlayers(currentPlayers);
+    }, 3000);
+  }
   playRoundEndAnimations(body.animations || []);
   const pauseMs = Math.max(0, Number(body.pauseSeconds || 3) * 1000);
   roundResultTimer = setTimeout(() => {
@@ -362,15 +436,31 @@ function handleRoundEnd(body) {
   }, pauseMs);
 }
 
+function addTransientEffectIcons(effectIconsByPlayer) {
+  for (const [playerId, icons] of Object.entries(effectIconsByPlayer || {})) {
+    const player = currentPlayers.find((entry) => entry.id === playerId);
+    if (!player) continue;
+    const existing = Array.isArray(player.effectIcons) ? player.effectIcons.filter((icon) => !icon.transient) : [];
+    player.effectIcons = existing.concat((icons || []).map((icon) => ({ ...icon, transient: true })));
+  }
+}
+
+function clearTransientEffectIcons() {
+  for (const player of currentPlayers) {
+    player.effectIcons = Array.isArray(player.effectIcons) ? player.effectIcons.filter((icon) => !icon.transient) : [];
+  }
+}
+
 function handleSetRoundTimer(body) {
   if (Number(body.countdownSeconds) >= 0) startCountdown(Number(body.countdownSeconds));
 }
 
 function handleRoundPause(body) {
+  forceEndCurrentAnimation();
   stopCountdown();
   const animations = Array.isArray(body.animations) ? body.animations : [];
   const fallbackSeconds = Math.max(0, Number(body.pauseSeconds || 0));
-  const playback = animations.length ? playAnimationSequence(animations) : showTimedOverlay("回合时间暂停", fallbackSeconds);
+  const playback = animations.length ? playAnimationSequence(animations) : showTimedOverlay("\u56de\u5408\u65f6\u95f4\u6682\u505c", fallbackSeconds);
   playback.finally(() => {
     if (Number(body.countdownSeconds) >= 0) startCountdown(Number(body.countdownSeconds));
   });
@@ -418,7 +508,7 @@ function showSettlement(body) {
 }
 
 function handleSettlementSellResult(body) {
-  alert(`出售获得了 ${formatNumber(body.total || 0)}`);
+  alert(`\u51fa\u552e\u83b7\u5f97\u4e86 ${formatNumber(body.total || 0)}`);
   socket?.send(JSON.stringify({ type: "return_room" }));
 }
 
@@ -426,7 +516,7 @@ function buildSettlementRarityFilter() {
   const filter = document.querySelector("#settlementRarityFilter");
   if (!filter) return;
   filter.innerHTML = levelRarities.map((rarity) => `
-    <button class="rarity-diamond" type="button" data-rarity="${rarity}" title="${rarityLabels[rarity]}色品质" style="--rarity-color:${rarityColors[rarity]}">
+    <button class="rarity-diamond" type="button" data-rarity="${rarity}" title="${rarityLabels[rarity]}\u8272\u54c1\u8d28" style="--rarity-color:${rarityColors[rarity]}">
       <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2 21 12 12 22 3 12Z"></path></svg>
     </button>
   `).join("");
@@ -451,7 +541,7 @@ function renderSettlementInfo(body) {
   const sellActions = document.querySelector("#winnerSellActions");
   document.querySelector("#dividendText").textContent = "";
   if (!winner) {
-    winnerBox.innerHTML = "<p>流拍，无人得拍</p>";
+    winnerBox.innerHTML = "<p>\u6d41\u62cd\uff0c\u65e0\u4eba\u5f97\u62cd</p>";
     document.querySelector("#finalBidValue").textContent = "-";
     sellActions.hidden = true;
     return;
@@ -476,8 +566,8 @@ function renderCopiedItems(copiedItems) {
     el.innerHTML = `
       <div class="notice-icon"><img src="/resource/system_message.png" alt="" /></div>
       <div>
-        <strong>${escapeHtml(nickname)}复制了以下物品：</strong>
-        <span>总价值 ${formatNumber(totalValue)}</span>
+        <strong>${escapeHtml(nickname)}\u590d\u5236\u4e86\u4ee5\u4e0b\u7269\u54c1\uff1a</strong>
+        <span>\u603b\u4ef7\u503c ${formatNumber(totalValue)}</span>
         <div class="copied-loot-grid">
           ${items.map((item) => `<div class="copied-loot-card" style="--rarity-color:${rarityColors[item.rarity] || rarityColors.gray}"><span>${escapeHtml(item.name || `#${item.id}`)}</span><img src="/resource/auction/${item.id}.png" alt="" /></div>`).join("")}
         </div>
@@ -496,8 +586,8 @@ function renderChairReplacement(chairReplacement) {
   el.innerHTML = `
     <div class="notice-icon"><img src="/resource/system_message.png" alt="" /></div>
     <div>
-      <strong>以下物品被替换为了椅子，使总价值变化了${formatNumber(chairReplacement.delta || 0)}</strong>
-      <span>${escapeHtml(chair.name || "椅子")}</span>
+      <strong>\u4ee5\u4e0b\u7269\u54c1\u88ab\u66ff\u6362\u4e3a\u4e86\u6905\u5b50\uff0c\u4f7f\u603b\u4ef7\u503c\u53d8\u5316\u4e86${formatNumber(chairReplacement.delta || 0)}</strong>
+      <span>${escapeHtml(chair.name || "\u6905\u5b50")}</span>
       <div class="copied-loot-grid">
         ${chairReplacement.replacedItems.map((item) => copiedLootCard(item)).join("")}
         ${copiedLootCard(chair)}
@@ -510,7 +600,7 @@ function renderChairReplacement(chairReplacement) {
 function copiedLootCard(item) {
   const name = item.name || `#${item.id}`;
   const price = Number(item.price || 0);
-  return `<div class="copied-loot-card" title="${escapeHtml(`${name}\n价值 ${formatNumber(price)}`)}" style="--rarity-color:${rarityColors[item.rarity] || rarityColors.gray}"><span>${escapeHtml(name)}</span><img src="/resource/auction/${item.id}.png" alt="" /></div>`;
+  return `<div class="copied-loot-card" title="${escapeHtml(`${name}\n\u4ef7\u503c ${formatNumber(price)}`)}" style="--rarity-color:${rarityColors[item.rarity] || rarityColors.gray}"><span>${escapeHtml(name)}</span><img src="/resource/auction/${item.id}.png" alt="" /></div>`;
 }
 
 function renderExtraRewards(rewards) {
@@ -524,11 +614,11 @@ function renderExtraRewards(rewards) {
     returnButton.insertAdjacentElement("afterend", el);
   }
   const names = (rewards || []).map((item) => item.name || clientItems.get(Number(item.id))?.name || `#${item.id}`);
-  el.textContent = names.length ? `额外获得奖励：${names.join(", ")}` : "";
+  el.textContent = names.length ? `\u989d\u5916\u83b7\u5f97\u5956\u52b1\uff1a${names.join(", ")}` : "";
 }
 
 function revealDividend(body) {
-  document.querySelector("#dividendText").textContent = body.dividend > 0 ? `本局获得分红 ${formatNumber(body.dividend || 0)}` : "";
+  document.querySelector("#dividendText").textContent = body.dividend > 0 ? `\u672c\u5c40\u83b7\u5f97\u5206\u7ea2 ${formatNumber(body.dividend || 0)}` : "";
   settlementActions.hidden = false;
 }
 
@@ -549,7 +639,7 @@ function updateKnownLootValue(value) {
 function addNotice(entry) {
   const el = document.createElement("article");
   el.className = "notice";
-  el.innerHTML = `<div class="notice-icon">${entry.icon ? `<img src="${escapeHtml(entry.icon)}" alt="" />` : ""}</div><div><strong>${escapeHtml(entry.title)}</strong><span>${escapeHtml(entry.text)}</span></div>${entry.show ? '<button type="button">显示</button>' : ""}`;
+  el.innerHTML = `<div class="notice-icon">${entry.icon ? `<img src="${escapeHtml(entry.icon)}" alt="" />` : ""}</div><div><strong>${escapeHtml(entry.title)}</strong><span>${escapeHtml(entry.text)}</span></div>${entry.show ? '<button type="button">\u663e\u793a</button>' : ""}`;
   const button = el.querySelector("button");
   if (button) button.addEventListener("click", () => renderer.showHighlight(entry.message || []));
   noticeList.appendChild(el);
@@ -565,11 +655,11 @@ function showMegumiChoice(body) {
   const canChooseDomain = body.canChooseDomain !== false;
   topOverlay.innerHTML = `
     <div class="overlay-card choice-card">
-      <strong>Megumi 抉择</strong>
-      <span>${escapeHtml(body.text || "请选择本局技能路线。")}</span>
+      <strong>Megumi \u6289\u62e9</strong>
+      <span>${escapeHtml(body.text || "\u8bf7\u9009\u62e9\u672c\u5c40\u6280\u80fd\u8def\u7ebf")}</span>
       <div class="overlay-actions">
-        <button type="button" data-choice="domain" ${canChooseDomain ? "" : "disabled"} title="${canChooseDomain ? "" : "本局玩家少于3人，不能选择领域展开"}">领域展开</button>
-        <button type="button" data-choice="makora">跟你爆了</button>
+        <button type="button" data-choice="domain" ${canChooseDomain ? "" : "disabled"} title="${canChooseDomain ? "" : "\u672c\u5c40\u73a9\u5bb6\u5c11\u4e8e3\u4eba\uff0c\u4e0d\u80fd\u9009\u62e9\u9886\u57df\u5c55\u5f00"}">\u9886\u57df\u5c55\u5f00</button>
+        <button type="button" data-choice="makora">\u8ddf\u4f60\u7206\u4e86</button>
       </div>
     </div>
   `;
@@ -589,13 +679,13 @@ function showMegumiPrediction(body, { closable = true } = {}) {
   topOverlay.hidden = false;
   topOverlay.innerHTML = `
     <div class="overlay-card prediction-card">
-      <strong>Makora 出价预测</strong>
-      ${closable ? '<button class="overlay-close" type="button" aria-label="关闭">×</button>' : ""}
+      <strong>Makora \u51fa\u4ef7\u9884\u6d4b</strong>
+      ${closable ? '<button class="overlay-close" type="button" aria-label="\u5173\u95ed">\u00d7</button>' : ""}
       <table>
-        <thead><tr><th>玩家昵称</th><th>上回合出价</th><th>你的预测</th></tr></thead>
-        <tbody>${rows.map((player) => `<tr data-player="${escapeHtml(player.id)}"><td>${escapeHtml(player.nickname)}</td><td>${formatNumber(player.lastBid || 0)}</td><td><button type="button" data-pick="up">↑</button><button class="selected" type="button" data-pick="equal">=</button><button type="button" data-pick="down">↓</button></td></tr>`).join("")}</tbody>
+        <thead><tr><th>\u73a9\u5bb6\u6635\u79f0</th><th>\u4e0a\u56de\u5408\u51fa\u4ef7</th><th>\u4f60\u7684\u9884\u6d4b</th></tr></thead>
+        <tbody>${rows.map((player) => `<tr data-player="${escapeHtml(player.id)}"><td>${escapeHtml(player.nickname)}</td><td>${formatNumber(player.lastBid || 0)}</td><td><button type="button" data-pick="up">\u2191</button><button class="selected" type="button" data-pick="equal">=</button><button type="button" data-pick="down">\u2193</button></td></tr>`).join("")}</tbody>
       </table>
-      <button type="button" id="submitPredictionButton">提交</button>
+      <button type="button" id="submitPredictionButton">\u63d0\u4ea4</button>
     </div>
   `;
   topOverlay.querySelector(".overlay-close")?.addEventListener("click", closeTopOverlay);
@@ -615,20 +705,53 @@ function showMegumiPrediction(body, { closable = true } = {}) {
   });
 }
 
-function closeTopOverlay() {
+function closeTopOverlay(resolveConfirm = true) {
+  if (resolveConfirm && activeConfirmResolve) {
+    const resolve = activeConfirmResolve;
+    activeConfirmResolve = null;
+    resolve(false);
+  }
   topOverlay.hidden = true;
   topOverlay.innerHTML = "";
 }
 
+function showConfirmDialog({ title, text = "", confirmText = "\u786e\u8ba4", cancelText = "\u53d6\u6d88" }) {
+  closeTopOverlay();
+  topOverlay.hidden = false;
+  topOverlay.innerHTML = `
+    <div class="overlay-card confirm-card">
+      <strong>${escapeHtml(title)}</strong>
+      ${text ? `<span>${escapeHtml(text)}</span>` : ""}
+      <div class="overlay-actions">
+        <button type="button" data-confirm="yes">${escapeHtml(confirmText)}</button>
+        <button type="button" data-confirm="no">${escapeHtml(cancelText)}</button>
+      </div>
+    </div>
+  `;
+  return new Promise((resolve) => {
+    activeConfirmResolve = resolve;
+    topOverlay.querySelectorAll("[data-confirm]").forEach((button) => {
+      button.addEventListener("click", () => {
+        const result = button.dataset.confirm === "yes";
+        if (activeConfirmResolve === resolve) activeConfirmResolve = null;
+        closeTopOverlay(false);
+        resolve(result);
+      });
+    });
+  });
+}
+
 function startCountdown(seconds) {
   stopCountdown();
-  remainingSeconds = Math.max(0, Number(seconds) || 0);
+  remainingSeconds = Math.max(0, Math.ceil(Number(seconds) || 0));
+  countdownEndsAt = Date.now() + remainingSeconds * 1000;
   updateTimer();
   countdownTimer = setInterval(() => {
-    remainingSeconds -= 1;
+    remainingSeconds = Math.max(0, Math.ceil((countdownEndsAt - Date.now()) / 1000));
     updateTimer();
     if (remainingSeconds <= 0) {
       stopCountdown();
+      closeTopOverlay();
       if (pendingTargetUse) completeTargetUse({ x: 0, y: 0 });
       sendBid(0, { skipPredictionConfirm: true });
     }
@@ -638,6 +761,7 @@ function startCountdown(seconds) {
 function stopCountdown() {
   clearInterval(countdownTimer);
   countdownTimer = null;
+  countdownEndsAt = 0;
 }
 
 function updateTimer() {
@@ -654,11 +778,13 @@ function handlePropSlots(body) {
   carriedProps = body.props || carriedProps;
   propUsesThisRound = Number(body.uses || 0);
   maxPropUsesThisRound = Number(body.maxUses || maxPropUsesThisRound || 1);
+  propUsePending = false;
   updateActionButtons();
 }
 
 function sendUseProp(slot, target = null) {
-  propUsesThisRound += 1;
+  if (propUsePending || hasBidThisRound || actionLockedThisRound || animationDepth > 0) return;
+  propUsePending = true;
   updateActionButtons();
   socket?.send(JSON.stringify({ type: "use_prop", slot, target }));
 }
@@ -674,10 +800,16 @@ function requiresTarget(id) {
   return id === "sp_prop1" || id === "sp_prop2" || id === "sp_prop3";
 }
 
-function sendBid(amount, { skipPredictionConfirm = false } = {}) {
+async function sendBid(amount, { skipPredictionConfirm = false } = {}) {
   if (hasBidThisRound || actionLockedThisRound) return;
   if (isMakora && predictionAvailable && !predictionSubmittedThisRound && !skipPredictionConfirm) {
-    if (!confirm("你还没有提交本回合预测。不发动预测将使用默认预测结果，确定继续出价吗？")) return;
+    const confirmed = await showConfirmDialog({
+      title: "确认直接出价？",
+      text: "你还没有提交本回合预测。不发动预测将使用默认预测结果。",
+      confirmText: "继续出价",
+      cancelText: "返回",
+    });
+    if (!confirmed || hasBidThisRound || actionLockedThisRound) return;
   }
   const value = Math.max(0, Math.floor(Number(amount) || 0));
   hasBidThisRound = true;
@@ -688,7 +820,7 @@ function sendBid(amount, { skipPredictionConfirm = false } = {}) {
 
 function updateActionButtons() {
   document.querySelector("#bidButton").disabled = hasBidThisRound || actionLockedThisRound || animationDepth > 0;
-  document.querySelector("#useItemButton").disabled = hasBidThisRound || actionLockedThisRound || propUsesThisRound >= maxPropUsesThisRound || animationDepth > 0;
+  document.querySelector("#useItemButton").disabled = hasBidThisRound || actionLockedThisRound || propUsePending || propUsesThisRound >= maxPropUsesThisRound || animationDepth > 0;
   if (predictButton) {
     predictButton.hidden = !(isMakora && predictionAvailable);
     predictButton.disabled = hasBidThisRound || actionLockedThisRound || !predictionAvailable || predictionSubmittedThisRound || animationDepth > 0;
@@ -715,42 +847,51 @@ function updateTransformCountdown() {
 }
 
 async function playRoundEndAnimations(animations) {
+  const token = ++roundEndAnimationToken;
   for (const animation of animations) {
+    if (token !== roundEndAnimationToken) break;
     const delay = Math.max(0, Number(animation.delaySeconds || 0) * 1000);
     if (delay) await wait(delay);
+    if (token !== roundEndAnimationToken) break;
     await playAnimationSequence([animation], { queueMessages: false });
   }
 }
 
 async function playAnimationSequence(animations, { queueMessages = true } = {}) {
   if (!animations.length) return;
+  const token = ++animationRunToken;
   animationDepth += queueMessages ? 1 : 0;
   updateActionButtons();
   try {
-    for (const animation of animations) await playSingleAnimation(Number(animation.id), Number(animation.durationSeconds || animationDurations[animation.id] || 1));
+    for (const animation of animations) {
+      if (token !== animationRunToken) break;
+      await playSingleAnimation(Number(animation.id), Number(animation.durationSeconds || animationDurations[animation.id] || 1), token);
+    }
   } finally {
-    if (queueMessages) animationDepth -= 1;
-    stopCurrentAnimation();
+    if (queueMessages) animationDepth = Math.max(0, animationDepth - 1);
+    if (token === animationRunToken) stopCurrentAnimation();
     updateActionButtons();
     flushQueuedMessages();
   }
 }
 
 function showTimedOverlay(text, seconds) {
+  const token = ++animationRunToken;
   animationDepth += 1;
   updateActionButtons();
   const overlay = createAnimationOverlay();
-  overlay.innerHTML = `<div class="overlay-card"><strong>${escapeHtml(text)}</strong><span>${formatNumber(seconds)} 秒</span></div>`;
+  overlay.innerHTML = `<div class="overlay-card"><strong>${escapeHtml(text)}</strong><span>${formatNumber(seconds)} \u79d2</span></div>`;
   return wait(seconds * 1000).finally(() => {
-    animationDepth -= 1;
-    stopCurrentAnimation();
+    animationDepth = Math.max(0, animationDepth - 1);
+    if (token === animationRunToken) stopCurrentAnimation();
     updateActionButtons();
     flushQueuedMessages();
   });
 }
 
-async function playSingleAnimation(id, durationSeconds) {
+async function playSingleAnimation(id, durationSeconds, token = animationRunToken) {
   stopCurrentAnimation();
+  if (token !== animationRunToken) return;
   const overlay = createAnimationOverlay();
   showAnimationLoading(overlay, id);
   if (id === 1 || id === 2 || id === 3 || id === 6 || id === 8 || id === 9) {
@@ -759,6 +900,7 @@ async function playSingleAnimation(id, durationSeconds) {
       createLoadedAnimationImage(animationImageSrc(id), className),
       createReadyAnimationAudio(id),
     ]);
+    if (token !== animationRunToken) return;
     overlay.innerHTML = `<div class="webp-center-stage"></div>`;
     overlay.querySelector(".webp-center-stage").appendChild(img);
     await startPreparedAnimationAudio(audio);
@@ -769,6 +911,7 @@ async function playSingleAnimation(id, durationSeconds) {
       createLoadedAnimationImage(animationImageSrc(7), "slide-image-from-left"),
       createReadyAnimationAudio(id),
     ]);
+    if (token !== animationRunToken) return;
     const imageWidth = window.innerHeight * (img.naturalWidth / img.naturalHeight || 1);
     img.style.setProperty("--image-width", `${imageWidth}px`);
     overlay.replaceChildren(img);
@@ -781,6 +924,7 @@ async function playSingleAnimation(id, durationSeconds) {
       createLoadedAnimationImage(animationImageSrc("10_2"), "duel-piece duel-right"),
       createReadyAnimationAudio(id),
     ]);
+    if (token !== animationRunToken) return;
     const stage = document.createElement("div");
     stage.className = "duel-stage";
     stage.append(leftImg, rightImg);
@@ -793,6 +937,7 @@ async function playSingleAnimation(id, durationSeconds) {
       createLoadedAnimationImage(animationImageSrc(4), "slide-animation-image"),
       createReadyAnimationAudio(id),
     ]);
+    if (token !== animationRunToken) return;
     const imageWidth = window.innerHeight * (img.naturalWidth / img.naturalHeight || 1);
     img.style.setProperty("--image-width", `${imageWidth}px`);
     const dim = document.createElement("div");
@@ -806,6 +951,7 @@ async function playSingleAnimation(id, durationSeconds) {
       createLoadedAnimationImage(animationImageSrc(5), "fade-center-animation-image"),
       createReadyAnimationAudio(id),
     ]);
+    if (token !== animationRunToken) return;
     const dim = document.createElement("div");
     dim.className = "animation-dim-layer";
     overlay.replaceChildren(dim, img);
@@ -827,8 +973,8 @@ function createAnimationOverlay() {
 function showAnimationLoading(overlay, id) {
   overlay.innerHTML = `
     <div class="animation-loading">
-      <strong>动画加载中</strong>
-      <span>正在准备动画 ${escapeHtml(String(id))}</span>
+      <strong>\u52a8\u753b\u52a0\u8f7d\u4e2d</strong>
+      <span>\u6b63\u5728\u51c6\u5907\u52a8\u753b ${escapeHtml(String(id))}</span>
     </div>
   `;
 }
@@ -1049,6 +1195,14 @@ function stopCurrentAnimation() {
   currentAnimationAudio = null;
 }
 
+function forceEndCurrentAnimation() {
+  animationRunToken += 1;
+  roundEndAnimationToken += 1;
+  animationDepth = 0;
+  stopCurrentAnimation();
+  updateActionButtons();
+}
+
 function wait(ms) {
   return new Promise((resolve) => setTimeout(resolve, Math.max(0, ms)));
 }
@@ -1103,7 +1257,7 @@ function updateBidPanel() {
   const ratio = currentWinRatio();
   document.querySelector("#ratioButton").textContent = `x${ratio.toFixed(1)}`;
   document.querySelector("#divideRatioButton").textContent = `/${ratio.toFixed(1)}`;
-  document.querySelector("#ratioHint").textContent = `注意：当前出价若高于第二名出价 ${ratio} 倍则直接成交`;
+  document.querySelector("#ratioHint").textContent = `\u6ce8\u610f\uff1a\u5f53\u524d\u51fa\u4ef7\u82e5\u9ad8\u4e8e\u7b2c\u4e8c\u540d\u51fa\u4ef7 ${ratio} \u500d\u5219\u76f4\u63a5\u6210\u4ea4`;
   const value = Number(bidInput || 0);
   document.querySelector("#bidNumber").textContent = formatNumber(value);
   document.querySelector("#bidCn").textContent = chineseUnit(value);
@@ -1125,7 +1279,7 @@ function chineseUnit(value) {
   if (value >= 10000) {
     const wan = Math.floor(value / 10000);
     const rest = value % 10000;
-    return `${wan}万${rest ? rest : ""}`;
+    return `${wan}涓?{rest ? rest : ""}`;
   }
   return String(value);
 }
