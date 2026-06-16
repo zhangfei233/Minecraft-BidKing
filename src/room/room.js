@@ -486,6 +486,11 @@ export function createRoom({ rootDir, onGameStart }) {
     try {
       if (message.type === "lottery_refill") refillLottery(player);
       else if (message.type === "lottery_draw") sendWsJson(socket, { type: "lottery_result", body: performLottery(player) });
+      else if (message.type === "lottery_batch") {
+        const result = performBatchLottery(player, message.itemIds, message.mode);
+        sendWsJson(socket, { type: "lottery_batch_result", body: result });
+        broadcastRoomState();
+      }
       else if (message.type === "lottery_collect") {
         const result = collectLotteryResults(player, message.mode);
         sendWsJson(socket, { type: "lottery_collect_result", body: result });
@@ -757,6 +762,36 @@ export function createRoom({ rootDir, onGameStart }) {
     player.profile.lottery = normalizeLotteryState(player.profile.lottery);
     const results = player.profile.lottery.results || [];
     if (!results.length) throw new Error("没有可领取的抽奖结果");
+    const outcome = applyLotteryOutcome(player, results, mode);
+    player.profile.lottery.results = [];
+    return outcome;
+  }
+
+  function performBatchLottery(player, rawItemIds, mode = "take") {
+    player.profile.lottery = normalizeLotteryState(player.profile.lottery);
+    if (player.profile.lottery.results.length) throw new Error("请先领取或出售当前抽奖结果");
+    const ids = [...new Set((Array.isArray(rawItemIds) ? rawItemIds : []).map(Number).filter(Boolean))];
+    const consumables = new Set(lotteryConsumableIds(lotteryRecipes));
+    const selected = ids
+      .filter((id) => consumables.has(id))
+      .map((id) => ({ id, count: Math.max(0, Math.floor(Number(player.profile.warehouse.items[String(id)]?.count || 0))) }))
+      .filter((entry) => entry.count > 0);
+    if (!selected.length) throw new Error("没有选择可抽奖道具");
+    const allResults = [];
+    const consumed = [];
+    for (const entry of selected) {
+      const recipe = lotteryRecipes.find((item) => item.consume === entry.id);
+      if (!recipe) throw new Error("该物品不是抽奖道具");
+      removeProfileItem(player.profile, entry.id, entry.count);
+      consumed.push({ id: entry.id, name: itemsById.get(entry.id)?.name || `#${entry.id}`, count: entry.count });
+      for (let index = 0; index < entry.count; index += 1) allResults.push(...drawLottery(recipe, Math.random));
+    }
+    const results = mergeLotteryResults(allResults);
+    const outcome = applyLotteryOutcome(player, results, mode);
+    return { ...outcome, consumed, results };
+  }
+
+  function applyLotteryOutcome(player, results, mode = "take") {
     let total = 0;
     const collected = [];
     for (const result of results) {
@@ -768,7 +803,6 @@ export function createRoom({ rootDir, onGameStart }) {
       }
     }
     if (total > 0) addMoney(player.profile, total);
-    player.profile.lottery.results = [];
     return { mode, total, collected, money: player.profile.money };
   }
 

@@ -1,5 +1,6 @@
 ﻿import fs from "node:fs";
 import path from "node:path";
+import crypto from "node:crypto";
 import { Warehouse } from "./Warehouse.js";
 import { createCharacter } from "./characters.js";
 import { createProp } from "./props.js";
@@ -44,6 +45,8 @@ const RARITY_LABELS = { gray: "\u767d", green: "\u7eff", blue: "\u84dd", purple:
 const SYSTEM_HINT_TITLE = "\u516c\u5f00\u7684\u6218\u5229\u54c1\u4fe1\u606f";
 const PROP_USE_REWARD_ITEM_ID = 2715;
 const WINNER_REWARD_ITEM_ID = 2716;
+const SECRET_WORD_TAGS = ["\u300e\u87ba\u65cb\u697c\u68af\u300f", "\u300e\u72ec\u89d2\u4ed9\u300f", "\u300e\u5e9f\u5f03\u8857\u9053\u300f", "\u300e\u65e0\u82b1\u679c\u5854\u300f", "\u300e\u5fb7\u857e\u838e\u4e4b\u9053\u300f", "\u300e\u7279\u5f02\u70b9\u300f", "\u300e\u4e54\u6258\u300f", "\u300e\u5929\u4f7f\u300f", "\u300e\u7ee3\u7403\u82b1\u300f", "\u300e\u79d8\u5bc6\u7687\u5e1d\u300f"];
+const SECRET_WORD_SEQUENCE = ["\u300e\u87ba\u65cb\u697c\u68af\u300f", "\u300e\u72ec\u89d2\u4ed9\u300f", "\u300e\u5e9f\u5f03\u8857\u9053\u300f", "\u300e\u65e0\u82b1\u679c\u5854\u300f", "\u300e\u72ec\u89d2\u4ed9\u300f", "\u300e\u5fb7\u857e\u838e\u4e4b\u9053\u300f", "\u300e\u72ec\u89d2\u4ed9\u300f", "\u300e\u7279\u5f02\u70b9\u300f", "\u300e\u4e54\u6258\u300f", "\u300e\u5929\u4f7f\u300f", "\u300e\u7ee3\u7403\u82b1\u300f", "\u300e\u72ec\u89d2\u4ed9\u300f", "\u300e\u7279\u5f02\u70b9\u300f", "\u300e\u79d8\u5bc6\u7687\u5e1d\u300f"];
 const EFFECT_ICONS = {
   gojoVoid: "/resource/icon/Gojo_icon1.png",
   sukunaHalf: "/resource/icon/Sukuna_icon1.png",
@@ -247,6 +250,9 @@ export class GameSession {
       if (player.characterId === "character_20" && realItemIndexes.length) {
         player.characterState.pucciTargetIndex = realItemIndexes[Math.floor(this.random() * realItemIndexes.length)];
         player.characterState.madeInHeaven = false;
+        player.characterState.secretWordAvailable = false;
+        player.characterState.secretWordSubmitted = false;
+        player.characterState.secretWordChallenge = null;
       }
       if (player.characterId === "character_21") {
         player.characterState.megumiMode = null;
@@ -706,6 +712,11 @@ export class GameSession {
 
     if (message.type === "reiner_transform") {
       this.receiveReinerTransform(player);
+      return;
+    }
+
+    if (message.type === "secret_word_submit") {
+      this.receiveSecretWordSubmit(player, message.hash);
       return;
     }
 
@@ -1223,7 +1234,11 @@ export class GameSession {
         if (neighborIndex > 0) neighborIndexes.add(neighborIndex);
       }
       const message = [...neighborIndexes].map((neighborIndex) => this.warehouse.addHint(player.gameIndex, { type: "item_outline", itemIndex: neighborIndex }));
-      return { type: "hint", title: "道具【新月】", text: "选定位置没有战利品，已尝试显示相邻战利品轮廓。", show: message.length > 0, message };
+      if (player.characterId === "character_20" && !player.characterState.madeInHeaven) this.markPucciMoonFailed(player);
+      const text = message.length > 0
+        ? "选定位置没有战利品，已尝试显示相邻战利品轮廓。"
+        : "【新月】选择的位置没有物品，且相邻格也没有可显示的战利品。";
+      return { type: "hint", title: "道具【新月】", text, show: message.length > 0, message };
     }
 
     const selectedItem = this.warehouse.getItemByIndex(itemIndex);
@@ -1234,24 +1249,82 @@ export class GameSession {
     let text = `显示了【${selectedItem.name}】以及相邻战利品的轮廓。`;
     if (player.characterId === "character_20" && !player.characterState.madeInHeaven) {
       if (Number(player.characterState.pucciTargetIndex) === Number(itemIndex)) {
-        player.characterState.madeInHeaven = true;
-        player.characterState.madeInHeavenRound = this.round;
+        this.activateMadeInHeaven(player);
         text += " 目标定位成功，【天堂制造】开始。";
-        this.addEffectIcon(player, {
-          key: "pucci-made-in-heaven",
-          icon: EFFECT_ICONS.pucciHeaven,
-          text: "\u5929\u5802\u5236\u9020\uff1a\u65f6\u95f4\u6d41\u901f\u52a0\u500d\uff0c \u51fa\u4ef7\u5728\u7ade\u4ef7\u65f6\u89c6\u4e3ax1.3",
-        });
-        if (this.round === 1) this.awardAchievement(player, "18");
-        this.awardAchievement(player, "19");
-        this.applyMadeInHeavenTimingShift();
-        this.broadcastPublicState({ clearBidState: false });
       } else {
+        this.markPucciMoonFailed(player);
         text += " 选定位置错误。";
       }
     }
 
     return { type: "hint", title: "道具【新月】", text, show: message.length > 0, message };
+  }
+
+  markPucciMoonFailed(player) {
+    if (player.characterId !== "character_20" || this.round !== 5 || player.characterState.madeInHeaven) return;
+    player.characterState.pucciMoonFailedRoundFive = true;
+    if (!player.characterState.secretWordSubmitted) this.sendSecretWordChallenge(player);
+  }
+
+  sendSecretWordChallenge(player) {
+    if (player.characterId !== "character_20" || this.round !== 5 || player.submitted[this.round - 1]) return;
+    const values = shuffleValues(Array.from({ length: SECRET_WORD_TAGS.length }, (_, index) => index), this.random);
+    const mapping = Object.fromEntries(SECRET_WORD_TAGS.map((tag, index) => [tag, values[index]]));
+    const correctValues = SECRET_WORD_SEQUENCE.map((tag) => mapping[tag]);
+    player.characterState.secretWordAvailable = true;
+    player.characterState.secretWordChallenge = {
+      mapping,
+      hash: hashSecretWordValues(correctValues),
+    };
+    this.send(player, { type: "secret_word_available", body: { mapping } });
+  }
+
+  receiveSecretWordSubmit(player, hash) {
+    const roundIndex = this.round - 1;
+    if (
+      this.round !== 5
+      || player.characterId !== "character_20"
+      || player.characterState.madeInHeaven
+      || !player.characterState.pucciMoonFailedRoundFive
+      || !player.characterState.secretWordAvailable
+      || player.characterState.secretWordSubmitted
+      || player.submitted[roundIndex]
+      || (this.roundEndsAt && Date.now() >= this.roundEndsAt)
+      || this.roundPaused
+      || this.finished
+    ) {
+      this.send(player, characterTextHint("\u5bc6\u8bed\u63d0\u4ea4\u65e0\u6548\u3002", this.characterDefinitions.get(player.characterId)?.image));
+      return;
+    }
+    player.characterState.secretWordSubmitted = true;
+    player.characterState.secretWordAvailable = false;
+    const expected = player.characterState.secretWordChallenge?.hash || "";
+    const ok = typeof hash === "string" && hash === expected;
+    if (!ok) {
+      this.send(player, characterTextHint("\u5bc6\u8bed\u9519\u8bef\uff0c\u672a\u80fd\u8fdb\u5165\u3010\u5929\u5802\u5236\u9020\u3011\u3002", this.characterDefinitions.get(player.characterId)?.image));
+      this.send(player, { type: "secret_word_state", body: { available: false } });
+      return;
+    }
+    this.activateMadeInHeaven(player, { multiplier: 1.2 });
+    this.send(player, characterTextHint("\u5bc6\u8bed\u6b63\u786e\uff0c\u3010\u5929\u5802\u5236\u9020\u3011\u5f00\u59cb\u3002", this.characterDefinitions.get(player.characterId)?.image));
+    this.send(player, { type: "secret_word_state", body: { available: false } });
+  }
+
+  activateMadeInHeaven(player, { multiplier = 1.3 } = {}) {
+    if (player.characterState.madeInHeaven) return false;
+    player.characterState.madeInHeaven = true;
+    player.characterState.madeInHeavenRound = this.round;
+    player.characterState.madeInHeavenMultiplier = multiplier;
+    this.addEffectIcon(player, {
+      key: "pucci-made-in-heaven",
+      icon: EFFECT_ICONS.pucciHeaven,
+      text: `\u5929\u5802\u5236\u9020\uff1a\u65f6\u95f4\u6d41\u901f\u52a0\u500d\uff0c \u51fa\u4ef7\u5728\u7ade\u4ef7\u65f6\u89c6\u4e3ax${formatMultiplier(multiplier)}`,
+    });
+    if (this.round === 1) this.awardAchievement(player, "18");
+    this.awardAchievement(player, "19");
+    this.applyMadeInHeavenTimingShift();
+    this.broadcastPublicState({ clearBidState: false });
+    return true;
   }
 
   neighborItemIndexes(itemIndex) {
@@ -1560,6 +1633,7 @@ export class GameSession {
         roundInitialSeconds: this.started ? this.clientCountdownSecondsFor(this.currentRoundDurationMs || ROUND_MS) : 0,
         actionLocked: this.actionLockedPlayerIds.has(player.id),
         madeInHeavenActive: this.players.some((entry) => entry.characterState.madeInHeaven),
+        secretWord: secretWordPublicState(player),
         hints: this.warehouse.getView(player.gameIndex).hint,
         notices: player.messageLog || [],
         reconnect: this.started,
@@ -1779,7 +1853,7 @@ export class GameSession {
 
   bidMultiplierFor(player, roundIndex) {
     let multiplier = 1;
-    if (player.characterState.madeInHeaven) multiplier *= 1.3;
+    if (player.characterState.madeInHeaven) multiplier *= Number(player.characterState.madeInHeavenMultiplier || 1.3);
     if (player.characterState.reinerTransformed) multiplier *= reinerMultiplierForRound(roundIndex + 1);
     if (player.characterState.domainBidMultiplier?.[roundIndex]) multiplier *= Number(player.characterState.domainBidMultiplier[roundIndex]) || 1;
     if (player.characterId === "character_19") {
@@ -2123,6 +2197,25 @@ function reinerMultiplierForRound(round) {
 
 function formatMultiplier(value) {
   return Number(value || 0).toFixed(1).replace(/\.0$/, "");
+}
+
+function hashSecretWordValues(values) {
+  return crypto.createHash("sha256").update(values.join(","), "utf8").digest("hex");
+}
+
+function shuffleValues(values, random = Math.random) {
+  const result = [...values];
+  for (let index = result.length - 1; index > 0; index -= 1) {
+    const target = Math.floor(random() * (index + 1));
+    [result[index], result[target]] = [result[target], result[index]];
+  }
+  return result;
+}
+
+function secretWordPublicState(player) {
+  const state = player.characterState || {};
+  if (!state.secretWordAvailable || state.secretWordSubmitted || !state.secretWordChallenge?.mapping) return { available: false };
+  return { available: true, mapping: state.secretWordChallenge.mapping };
 }
 
 function characterHasRoundOneEffect(characterId) {

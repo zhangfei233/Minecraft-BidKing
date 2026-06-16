@@ -15,6 +15,7 @@ const settlementActions = document.querySelector("#settlementActions");
 const topOverlay = document.querySelector("#topOverlay");
 const predictButton = document.querySelector("#predictButton");
 const transformButton = document.querySelector("#transformButton");
+const secretWordButton = document.querySelector("#secretWordButton");
 const transformCountdown = document.querySelector("#transformCountdown");
 const renderer = new WarehouseCanvas(canvas, { cellSize: 54 });
 
@@ -56,6 +57,7 @@ let animationRunToken = 0;
 let roundEndAnimationToken = 0;
 let propUsePending = false;
 let activeConfirmResolve = null;
+let secretWordState = { available: false, mapping: null, selected: [], submitted: false };
 
 const levelRarities = ["gray", "green", "blue", "purple", "gold", "red"];
 const rarityLabels = { gray: "\u767d", green: "\u7eff", blue: "\u84dd", purple: "\u7d2b", gold: "\u91d1", red: "\u7ea2" };
@@ -65,10 +67,13 @@ const audioCache = new Map();
 const animationDurations = { 1: 13.92, 2: 9.2, 3: 12, 4: 3.5, 5: 2, 6: 8.75, 7: 5.25, 8: 10.25, 9: 10, 10: 5 };
 const animationImageCache = new Map();
 const animationAudioCache = new Map();
+const animationImageBlobCache = new Map();
+const animationImageBlobFetchPromises = new Map();
 const animationPreloadPromises = new Map();
 const animationPreloadLinks = new Set();
 const animationAssetUrlCache = new Map();
 const animationAssetFetchPromises = new Map();
+let currentAnimationObjectUrls = [];
 
 for (const [name, ext] of [["click", "mp3"], ["chest", "mp3"], ["orb", "mp3"], ["firework", "mp3"], ["splash", "ogg"], ["bell", "ogg"]]) preloadSound(name, ext);
 
@@ -96,6 +101,10 @@ transformButton?.addEventListener("click", () => {
   if (!canUseReinerTransform()) return;
   socket?.send(JSON.stringify({ type: "reiner_transform" }));
   transformButton.disabled = true;
+});
+secretWordButton?.addEventListener("click", () => {
+  if (!secretWordState.available || secretWordState.submitted || hasBidThisRound || actionLockedThisRound || animationDepth > 0) return;
+  showSecretWordDialog();
 });
 document.querySelector("#sellAllLootButton").addEventListener("click", () => socket?.send(JSON.stringify({ type: "settlement_sell", mode: "all" })));
 document.querySelector("#sellUnfavoriteLootButton").addEventListener("click", () => socket?.send(JSON.stringify({ type: "settlement_sell", mode: "unfavorite" })));
@@ -178,6 +187,8 @@ function dispatchMessage(message) {
     predictionSubmittedThisRound = false;
     updateActionButtons();
   }
+  if (message.type === "secret_word_available") handleSecretWordAvailable(message.body);
+  if (message.type === "secret_word_state") handleSecretWordState(message.body);
   if (message.type === "public_state") handlePublicState(message.body);
   if (message.type === "game_over") handleGameOver(message.body);
   if (message.type === "settlement_sell_result") handleSettlementSellResult(message.body);
@@ -210,6 +221,7 @@ function renderInit(data) {
   noticeList.innerHTML = "";
   renderer.reset();
   if (Array.isArray(data.hints) && data.hints.length) renderer.applyHint({ message: data.hints });
+  handleSecretWordState(data.secretWord || { available: false }, { preserveSelection: true });
   updateKnownLootValue(renderer.revealedValue());
   handleTimerStyle({ madeInHeaven: Boolean(data.madeInHeavenActive) });
   roundInitialSeconds = Number(data.roundInitialSeconds || data.countdownSeconds || 60);
@@ -705,6 +717,86 @@ function showMegumiPrediction(body, { closable = true } = {}) {
   });
 }
 
+function handleSecretWordAvailable(body) {
+  const mapping = body?.mapping && typeof body.mapping === "object" ? body.mapping : null;
+  if (!mapping) return;
+  secretWordState.available = true;
+  secretWordState.mapping = mapping;
+  secretWordState.submitted = false;
+  updateActionButtons();
+}
+
+function handleSecretWordState(body, { preserveSelection = false } = {}) {
+  secretWordState.available = Boolean(body?.available);
+  secretWordState.mapping = body?.mapping || (preserveSelection ? secretWordState.mapping : null);
+  secretWordState.submitted = !secretWordState.available && secretWordState.submitted;
+  if (!preserveSelection && !secretWordState.available) secretWordState.selected = [];
+  updateActionButtons();
+}
+
+function showSecretWordDialog() {
+  const tags = Object.entries(secretWordState.mapping || {})
+    .map(([text, value]) => ({ text, value: Number(value) }))
+    .sort((a, b) => a.value - b.value);
+  if (!tags.length) return;
+  topOverlay.hidden = false;
+  renderSecretWordDialog(tags);
+}
+
+function renderSecretWordDialog(tags) {
+  topOverlay.innerHTML = `
+    <div class="overlay-card secret-word-card">
+      <section class="secret-selected">
+        ${secretWordState.selected.map((entry, index) => `
+          <button type="button" class="secret-tag selected" data-remove-index="${index}">
+            <span>${escapeHtml(entry.text)}</span><b>&times;</b>
+          </button>
+        `).join("")}
+      </section>
+      <section class="secret-palette">
+        ${tags.map((entry) => `
+          <button type="button" class="secret-tag add" data-tag-value="${entry.value}" data-tag-text="${escapeHtml(entry.text)}">
+            <span>${escapeHtml(entry.text)}</span><b>+</b>
+          </button>
+        `).join("")}
+      </section>
+      <div class="secret-actions">
+        <button type="button" id="confirmSecretWordButton">\u786e\u8ba4</button>
+        <button type="button" id="cancelSecretWordButton">\u53d6\u6d88</button>
+      </div>
+    </div>
+  `;
+  topOverlay.querySelectorAll("[data-remove-index]").forEach((button) => {
+    button.addEventListener("click", () => {
+      secretWordState.selected.splice(Number(button.dataset.removeIndex), 1);
+      renderSecretWordDialog(tags);
+    });
+  });
+  topOverlay.querySelectorAll("[data-tag-value]").forEach((button) => {
+    button.addEventListener("click", () => {
+      secretWordState.selected.push({ text: button.dataset.tagText, value: Number(button.dataset.tagValue) });
+      renderSecretWordDialog(tags);
+    });
+  });
+  topOverlay.querySelector("#cancelSecretWordButton")?.addEventListener("click", () => closeTopOverlay(false));
+  topOverlay.querySelector("#confirmSecretWordButton")?.addEventListener("click", submitSecretWord);
+}
+async function submitSecretWord() {
+  if (!secretWordState.available || secretWordState.submitted) return;
+  const values = secretWordState.selected.map((entry) => entry.value);
+  const hash = await sha256Hex(values.join(","));
+  secretWordState.submitted = true;
+  updateActionButtons();
+  closeTopOverlay(false);
+  socket?.send(JSON.stringify({ type: "secret_word_submit", hash }));
+}
+
+async function sha256Hex(text) {
+  const bytes = new TextEncoder().encode(text);
+  const digest = await crypto.subtle.digest("SHA-256", bytes);
+  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
 function closeTopOverlay(resolveConfirm = true) {
   if (resolveConfirm && activeConfirmResolve) {
     const resolve = activeConfirmResolve;
@@ -830,6 +922,10 @@ function updateActionButtons() {
     transformButton.disabled = !canUseReinerTransform();
     updateTransformCountdown();
   }
+  if (secretWordButton) {
+    secretWordButton.hidden = !secretWordState.available;
+    secretWordButton.disabled = !secretWordState.available || secretWordState.submitted || hasBidThisRound || actionLockedThisRound || animationDepth > 0;
+  }
 }
 
 function canUseReinerTransform() {
@@ -897,7 +993,7 @@ async function playSingleAnimation(id, durationSeconds, token = animationRunToke
   if (id === 1 || id === 2 || id === 3 || id === 6 || id === 8 || id === 9) {
     const className = id >= 6 ? "centered-webp" : "fullscreen-animation";
     const [img, audio] = await Promise.all([
-      createLoadedAnimationImage(animationImageSrc(id), className),
+      createLoadedAnimationImage(animationImageSrc(id), className, { freshObjectUrl: true }),
       createReadyAnimationAudio(id),
     ]);
     if (token !== animationRunToken) return;
@@ -948,7 +1044,7 @@ async function playSingleAnimation(id, durationSeconds, token = animationRunToke
   }
   if (id === 5) {
     const [img, audio] = await Promise.all([
-      createLoadedAnimationImage(animationImageSrc(5), "fade-center-animation-image"),
+      createLoadedAnimationImage(animationImageSrc(5), "fade-center-animation-image", { freshObjectUrl: true }),
       createReadyAnimationAudio(id),
     ]);
     if (token !== animationRunToken) return;
@@ -979,8 +1075,8 @@ function showAnimationLoading(overlay, id) {
   `;
 }
 
-async function createLoadedAnimationImage(src, className) {
-  const playableSrc = await getAnimationAssetUrl(src);
+async function createLoadedAnimationImage(src, className, { freshObjectUrl = false } = {}) {
+  const playableSrc = freshObjectUrl ? await createFreshAnimationImageUrl(src) : await getAnimationAssetUrl(src);
   addPreloadLink(src, "image");
   return new Promise((resolve, reject) => {
     const img = buildAnimationImage(className);
@@ -1010,6 +1106,13 @@ async function createLoadedAnimationImage(src, className) {
     img.src = playableSrc;
     if (img.complete && img.naturalWidth > 0) finish();
   });
+}
+
+async function createFreshAnimationImageUrl(src) {
+  const blob = await getAnimationImageBlob(src);
+  const objectUrl = URL.createObjectURL(blob);
+  currentAnimationObjectUrls.push(objectUrl);
+  return objectUrl;
 }
 
 function buildAnimationImage(className) {
@@ -1081,6 +1184,7 @@ function preloadAnimation(id) {
 
 async function preloadAnimationImage(src) {
   addPreloadLink(src, "image");
+  await getAnimationImageBlob(src);
   const playableSrc = await getAnimationAssetUrl(src);
   const existing = animationImageCache.get(src);
   if (existing?.complete && existing.naturalWidth > 0) return Promise.resolve(existing);
@@ -1106,6 +1210,22 @@ async function preloadAnimationImage(src) {
       finish();
     }
   });
+}
+
+function getAnimationImageBlob(src) {
+  if (animationImageBlobCache.has(src)) return Promise.resolve(animationImageBlobCache.get(src));
+  if (animationImageBlobFetchPromises.has(src)) return animationImageBlobFetchPromises.get(src);
+  const promise = fetch(src, { cache: "force-cache" })
+    .then((response) => {
+      if (!response.ok) throw new Error(`Animation image fetch failed: ${src}`);
+      return response.blob();
+    })
+    .then((blob) => {
+      animationImageBlobCache.set(src, blob);
+      return blob;
+    });
+  animationImageBlobFetchPromises.set(src, promise);
+  return promise;
 }
 
 async function preloadAnimationAudio(id) {
@@ -1188,6 +1308,8 @@ function animationAudioSrc(id) {
 function stopCurrentAnimation() {
   if (currentAnimationOverlay) currentAnimationOverlay.remove();
   currentAnimationOverlay = null;
+  for (const url of currentAnimationObjectUrls) URL.revokeObjectURL(url);
+  currentAnimationObjectUrls = [];
   if (currentAnimationAudio) {
     currentAnimationAudio.pause();
     currentAnimationAudio.currentTime = 0;
@@ -1279,7 +1401,7 @@ function chineseUnit(value) {
   if (value >= 10000) {
     const wan = Math.floor(value / 10000);
     const rest = value % 10000;
-    return `${wan}涓?{rest ? rest : ""}`;
+    return `${wan}\u4e07${rest ? rest : ""}`;
   }
   return String(value);
 }

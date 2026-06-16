@@ -612,3 +612,136 @@ select {
   font-size: 18px;
 }
 
+.lottery-dialog-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(0, 0, 0, 0.62);
+}
+
+.lottery-dialog {
+  position: relative;
+  width: min(760px, 92vw);
+  max-height: min(620px, 86vh);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #141b20;
+  color: var(--text);
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  gap: 16px;
+  padding: 22px;
+  box-shadow: 0 28px 80px rgba(0, 0, 0, 0.52);
+}
+
+.lottery-dialog h2 {
+  margin: 0;
+  font-size: 24px;
+}
+
+.lottery-dialog-close {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  width: 34px;
+  height: 34px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text);
+  font-size: 24px;
+  line-height: 1;
+}
+
+.batch-lottery-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(128px, 1fr));
+  gap: 12px;
+  overflow: auto;
+  padding-right: 4px;
+}
+
+.batch-consumable-card {
+  position: relative;
+  min-height: 152px;
+  border: 2px solid transparent;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--rarity-color) 82%, #111 18%);
+  color: #070a0c;
+  display: grid;
+  grid-template-rows: 76px auto auto;
+  justify-items: center;
+  gap: 6px;
+  padding: 12px 8px 10px;
+  cursor: pointer;
+}
+
+.batch-consumable-card:not(.selected) {
+  opacity: 0.58;
+  filter: grayscale(0.5);
+}
+
+.batch-consumable-card.selected {
+  border-color: #7cff9b;
+  box-shadow: 0 0 0 2px rgba(124, 255, 155, 0.24);
+}
+
+.batch-consumable-card img {
+  width: 72px;
+  height: 72px;
+  object-fit: contain;
+}
+
+.batch-consumable-card strong {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.batch-consumable-card small {
+  font-weight: 900;
+}
+
+.selected-check {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: #fff;
+  color: #0bad3d;
+  font-weight: 900;
+  display: none;
+  place-items: center;
+}
+
+.batch-consumable-card.selected .selected-check {
+  display: grid;
+}
+
+.lottery-dialog footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.lottery-dialog footer button {
+  min-height: 40px;
+  border: 2px solid #22b355;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text);
+  font-weight: 800;
+  padding: 0 14px;
+}
+
+.lottery-dialog footer button:disabled {
+  opacity: 0.42;
+  cursor: not-allowed;
+}
+

@@ -284,7 +284,7 @@ a {
   padding: 10px;
 }
 
-.action-panel:not(:has(#predictButton:not([hidden]))):not(:has(#transformButton:not([hidden]))) {
+.action-panel:not(:has(#predictButton:not([hidden]))):not(:has(#transformButton:not([hidden]))):not(:has(#secretWordButton:not([hidden]))) {
   width: 336px;
   grid-template-columns: 76px 1fr;
 }
@@ -317,7 +317,8 @@ a {
 }
 
 #predictButton,
-#transformButton {
+#transformButton,
+#secretWordButton {
   grid-column: 3;
   grid-row: 2;
   width: 56px;
@@ -331,7 +332,8 @@ a {
 }
 
 #predictButton img,
-#transformButton img {
+#transformButton img,
+#secretWordButton img {
   width: 48px;
   height: 48px;
   object-fit: contain;
@@ -359,7 +361,8 @@ a {
 
 #bidButton:disabled,
 #predictButton:disabled,
-#transformButton:disabled {
+#transformButton:disabled,
+#secretWordButton:disabled {
   opacity: 0.45;
   cursor: not-allowed;
 }
@@ -840,6 +843,95 @@ dialog {
 .prediction-card [data-pick].selected {
   background: #76d9ff;
   color: #051014;
+}
+
+.secret-word-card {
+  width: min(780px, 92vw);
+  height: min(560px, 86vh);
+  min-height: 0;
+  border: 1px solid rgba(0, 229, 255, 0.34);
+  border-radius: 8px;
+  background: linear-gradient(180deg, rgba(18, 27, 31, 0.98), rgba(8, 15, 18, 0.98));
+  color: var(--text);
+  display: grid;
+  grid-template-rows: minmax(150px, 1fr) auto auto;
+  gap: 12px;
+  padding: 18px;
+  overflow: hidden;
+}
+
+.secret-selected {
+  display: flex;
+  flex-wrap: wrap;
+  align-content: flex-start;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid rgba(255, 124, 227, 0.38);
+  border-radius: 6px;
+  min-height: 150px;
+  overflow: auto;
+  background: rgba(2, 7, 9, 0.5);
+}
+
+.secret-palette {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 8px;
+  padding: 0;
+}
+
+.secret-tag {
+  min-height: 34px;
+  border: 1px solid rgba(140, 166, 176, 0.72);
+  border-radius: 4px;
+  background: rgba(34, 45, 50, 0.96);
+  color: var(--text);
+  display: inline-flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 0 9px 0 11px;
+  font-size: 15px;
+  font-weight: 800;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.secret-tag.selected {
+  flex: 0 0 auto;
+  border-color: rgba(255, 124, 227, 0.7);
+  background: rgba(62, 33, 58, 0.96);
+}
+
+.secret-tag b {
+  color: #ff5d66;
+  font-size: 22px;
+  line-height: 1;
+  font-weight: 600;
+}
+
+.secret-tag.add b {
+  color: #d7faff;
+  font-weight: 400;
+}
+
+.secret-actions {
+  display: flex;
+  justify-content: center;
+  gap: 32px;
+  padding: 2px 0 0;
+}
+
+.secret-actions button {
+  width: 116px;
+  min-height: 36px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #2d363c;
+  color: var(--text);
+  font-size: 16px;
+  font-weight: 800;
+  cursor: pointer;
 }
 
 .animation-overlay {

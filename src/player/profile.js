@@ -65,7 +65,7 @@ export function removeProfileItem(profile, itemId, count = 1) {
   const amount = Math.max(1, Math.floor(Number(count) || 1));
   const key = String(id);
   const entry = profile.warehouse.items[key];
-  if (!entry || entry.count < amount) throw new Error(`物品数量不足: ${id}`);
+  if (!entry || entry.count < amount) throw new Error(`\u7269\u54c1\u6570\u91cf\u4e0d\u8db3: ${id}`);
   entry.count -= amount;
   if (entry.count <= 0) delete profile.warehouse.items[key];
 }
@@ -113,7 +113,7 @@ export function sellProfileItems(profile, itemIds, quantity, itemsById) {
     const key = String(id);
     const entry = profile.warehouse.items[key];
     const item = itemsById.get(Number(id));
-    if (!item) throw new Error(`未知物品: ${id}`);
+    if (!item) throw new Error(`\u672a\u77e5\u7269\u54c1: ${id}`);
     if (!entry || !Number.isInteger(entry.count) || entry.count <= 0) continue;
     const count = quantity == null ? entry.count : Math.min(entry.count, Math.max(0, Math.floor(quantity)));
     if (count <= 0) continue;
@@ -136,9 +136,9 @@ export function sellProfileItemCounts(profile, itemCounts, itemsById) {
     const count = Math.max(0, Math.floor(Number(rawCount) || 0));
     if (count <= 0) continue;
     const item = itemsById.get(id);
-    if (!item) throw new Error(`未知物品: ${id}`);
+    if (!item) throw new Error(`\u672a\u77e5\u7269\u54c1: ${id}`);
     const entry = profile.warehouse.items[key];
-    if (!entry || entry.count < count) throw new Error(`物品数量不足: ${id}`);
+    if (!entry || entry.count < count) throw new Error(`\u7269\u54c1\u6570\u91cf\u4e0d\u8db3: ${id}`);
     entry.count -= count;
     if (entry.count <= 0) delete profile.warehouse.items[key];
     const subtotal = count * item.price;
@@ -156,7 +156,7 @@ export function sellProfileProps(profile, propIds, quantity, propDefinitions) {
   for (const id of propIds) {
     const key = String(id);
     const prop = propDefinitions.get(key);
-    if (!prop) throw new Error(`未知道具: ${id}`);
+    if (!prop) throw new Error(`\u672a\u77e5\u9053\u5177: ${id}`);
     const owned = Math.max(0, Math.floor(Number(profile.warehouse.props[key]) || 0));
     if (owned <= 0) continue;
     const count = quantity == null ? owned : Math.min(owned, Math.max(0, Math.floor(Number(quantity) || 0)));
@@ -174,11 +174,11 @@ export function sellProfileProps(profile, propIds, quantity, propDefinitions) {
 export function buyProfileProps(profile, propId, quantity, propDefinitions) {
   normalizeProfile(profile, profile.nickname);
   const prop = propDefinitions.get(String(propId));
-  if (!prop) throw new Error(`未知道具: ${propId}`);
+  if (!prop) throw new Error(`\u672a\u77e5\u9053\u5177: ${propId}`);
   const count = Math.max(1, Math.floor(Number(quantity) || 1));
   const price = Number(prop.price || 0);
   const total = price * count;
-  if (profile.money < total) throw new Error("金钱不足");
+  if (profile.money < total) throw new Error("\u91d1\u94b1\u4e0d\u8db3");
   profile.money -= total;
   profile.warehouse.props[prop.id] = (profile.warehouse.props[prop.id] || 0) + count;
   return { id: prop.id, count, total, money: profile.money };
