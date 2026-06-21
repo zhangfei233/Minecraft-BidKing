@@ -13,10 +13,13 @@ const propChoices = document.querySelector("#propChoices");
 const settlementPanel = document.querySelector("#settlementPanel");
 const settlementActions = document.querySelector("#settlementActions");
 const topOverlay = document.querySelector("#topOverlay");
-const predictButton = document.querySelector("#predictButton");
-const transformButton = document.querySelector("#transformButton");
-const secretWordButton = document.querySelector("#secretWordButton");
-const transformCountdown = document.querySelector("#transformCountdown");
+const activeSkillSlot = document.querySelector("#activeSkillSlot");
+const activeSkillButton = document.querySelector("#activeSkillButton");
+const activeSkillIcon = document.querySelector("#activeSkillIcon");
+const activeSkillCountdown = document.querySelector("#activeSkillCountdown");
+const activeSkillPager = document.querySelector("#activeSkillPager");
+const activeSkillPage = document.querySelector("#activeSkillPage");
+const pointerCoord = document.querySelector("#pointerCoord");
 const renderer = new WarehouseCanvas(canvas, { cellSize: 54 });
 
 let socket = null;
@@ -46,6 +49,13 @@ let isMakora = false;
 let isReiner = false;
 let reinerTransformed = false;
 let actionLockedThisRound = false;
+let propUseLocked = false;
+let activeSkills = [];
+let activeSkillIndex = 0;
+let otosakaState = { present: false, canDefend: false, peepUsed: false, defendUsed: false, activeOwnerIds: [] };
+let rectangleSelection = null;
+let pendingPeepRect = null;
+let proxyPropUse = null;
 let roundInitialSeconds = 60;
 let countdownEndsAt = 0;
 let bellPlayedAt = new Set();
@@ -64,7 +74,7 @@ const rarityLabels = { gray: "\u767d", green: "\u7eff", blue: "\u84dd", purple: 
 const rarityColors = { red: "#ff6060", gold: "#faff75", purple: "#964aca", blue: "#7b8afc", green: "#95de93", gray: "#c7c7c7" };
 const selectedSettlementRarities = new Set();
 const audioCache = new Map();
-const animationDurations = { 1: 13.92, 2: 9.2, 3: 12, 4: 3.5, 5: 2, 6: 8.75, 7: 5.25, 8: 10.25, 9: 10, 10: 5 };
+const animationDurations = { 1: 13.92, 2: 9.2, 3: 12, 4: 3.5, 5: 2, 6: 8.75, 7: 5.25, 8: 10.25, 9: 10, 10: 5, 11: 7.25, 12: 2 };
 const animationImageCache = new Map();
 const animationAudioCache = new Map();
 const animationImageBlobCache = new Map();
@@ -93,18 +103,14 @@ buildSettlementRarityFilter();
 
 document.querySelector("#useItemButton").addEventListener("click", openPropDialog);
 document.querySelector("#bidButton").addEventListener("click", openBidPanel);
-predictButton?.addEventListener("click", () => {
-  if (!predictionAvailable || hasBidThisRound) return;
-  showMegumiPrediction(predictionAvailable, { closable: true });
-});
-transformButton?.addEventListener("click", () => {
-  if (!canUseReinerTransform()) return;
-  socket?.send(JSON.stringify({ type: "reiner_transform" }));
-  transformButton.disabled = true;
-});
-secretWordButton?.addEventListener("click", () => {
-  if (!secretWordState.available || secretWordState.submitted || hasBidThisRound || actionLockedThisRound || animationDepth > 0) return;
-  showSecretWordDialog();
+activeSkillButton?.addEventListener("click", () => activateCurrentSkill());
+activeSkillPager?.addEventListener("click", (event) => {
+  const button = event.target.closest("button[data-page]");
+  if (!button || activeSkills.length <= 1) return;
+  activeSkillIndex += button.dataset.page === "next" ? 1 : -1;
+  if (activeSkillIndex < 0) activeSkillIndex = activeSkills.length - 1;
+  if (activeSkillIndex >= activeSkills.length) activeSkillIndex = 0;
+  updateActionButtons();
 });
 document.querySelector("#sellAllLootButton").addEventListener("click", () => socket?.send(JSON.stringify({ type: "settlement_sell", mode: "all" })));
 document.querySelector("#sellUnfavoriteLootButton").addEventListener("click", () => socket?.send(JSON.stringify({ type: "settlement_sell", mode: "unfavorite" })));
@@ -117,6 +123,10 @@ document.querySelector("#returnRoomButton").addEventListener("click", () => sock
 canvas.addEventListener("click", (event) => {
   const cell = renderer.cellFromEvent(event);
   if (!cell) return;
+  if (rectangleSelection) {
+    handleRectangleSelectionClick(cell);
+    return;
+  }
   if (pendingTargetUse) {
     completeTargetUse(cell);
     return;
@@ -127,6 +137,13 @@ canvas.addEventListener("click", (event) => {
 
 canvas.addEventListener("mousemove", (event) => {
   const cell = renderer.cellFromEvent(event);
+  if (cell) {
+    pointerCoord.textContent = `当前指针 (${cell.x},${cell.y})`;
+    pointerCoord.hidden = false;
+    if (rectangleSelection?.first) renderer.setTemporaryCells(rectangleBorderCells(rectangleSelection.first, cell));
+  } else {
+    pointerCoord.hidden = true;
+  }
   const data = cell ? renderer.tooltipForCell(cell.x, cell.y) : null;
   if (!data) {
     tooltip.hidden = true;
@@ -139,6 +156,8 @@ canvas.addEventListener("mousemove", (event) => {
 });
 canvas.addEventListener("mouseleave", () => {
   tooltip.hidden = true;
+  pointerCoord.hidden = true;
+  if (rectangleSelection?.first) renderer.setTemporaryCells(rectangleBorderCells(rectangleSelection.first, rectangleSelection.first));
 });
 
 function connectGameSocket() {
@@ -173,6 +192,7 @@ function dispatchMessage(message) {
   if (message.type === "round_end") handleRoundEnd(message.body);
   if (message.type === "set_round_timer") handleSetRoundTimer(message.body);
   if (message.type === "round_pause") handleRoundPause(message.body);
+  if (message.type === "skill_animation") handleSkillAnimation(message.body);
   if (message.type === "preload_animations") preloadAnimations(message.body?.animations || []);
   if (message.type === "timer_style") handleTimerStyle(message.body);
   if (message.type === "megumi_choice_request") showMegumiChoice(message.body);
@@ -189,6 +209,9 @@ function dispatchMessage(message) {
   }
   if (message.type === "secret_word_available") handleSecretWordAvailable(message.body);
   if (message.type === "secret_word_state") handleSecretWordState(message.body);
+  if (message.type === "otosaka_state") handleOtosakaState(message.body);
+  if (message.type === "otosaka_proxy_prop_request") showOtosakaProxyPropDialog(message.body);
+  if (message.type === "prop_use_lock") handlePropUseLock(message.body);
   if (message.type === "public_state") handlePublicState(message.body);
   if (message.type === "game_over") handleGameOver(message.body);
   if (message.type === "settlement_sell_result") handleSettlementSellResult(message.body);
@@ -211,6 +234,7 @@ function renderInit(data) {
   maxPropUsesThisRound = Number(data.maxPropUses || 1);
   propUsesThisRound = Number(data.propUses || 0);
   propUsePending = false;
+  propUseLocked = Boolean(data.propUseLocked);
   currentMoney = Number(data.money || 0);
   gameMoney.textContent = formatNumber(currentMoney);
   currentRound = data.round ?? 1;
@@ -222,6 +246,7 @@ function renderInit(data) {
   renderer.reset();
   if (Array.isArray(data.hints) && data.hints.length) renderer.applyHint({ message: data.hints });
   handleSecretWordState(data.secretWord || { available: false }, { preserveSelection: true });
+  handleOtosakaState(data.otosaka || {});
   updateKnownLootValue(renderer.revealedValue());
   handleTimerStyle({ madeInHeaven: Boolean(data.madeInHeavenActive) });
   roundInitialSeconds = Number(data.roundInitialSeconds || data.countdownSeconds || 60);
@@ -239,8 +264,9 @@ function renderPlayers(players) {
   });
   currentPlayers = sorted;
   const me = sorted.find((player) => player.id === myId);
-  isMakora = Boolean(me?.characterId === "character_21" && me?.characterImageOverride);
-  isReiner = Boolean(me?.characterId === "character_22");
+  const stolen = me?.stolenCharacterIds || [];
+  isMakora = Boolean((me?.characterId === "character_21" || stolen.includes("character_21")) && (me?.characterImageOverride || me?.megumiMode === "makora"));
+  isReiner = Boolean(me?.characterId === "character_22" || stolen.includes("character_22"));
   reinerTransformed = Boolean(me?.reinerTransformed || me?.characterImageOverride?.includes("ArmoredTitan"));
   if (me?.submitted?.[currentRound - 1]) hasBidThisRound = true;
   updateActionButtons();
@@ -373,9 +399,19 @@ function handleRoundStart(body) {
   hasBidThisRound = actionLockedThisRound;
   propUsesThisRound = 0;
   propUsePending = false;
+  propUseLocked = false;
   pendingTargetUse = null;
   predictionAvailable = null;
   predictionSubmittedThisRound = false;
+  if (body.otosaka) handleOtosakaState(body.otosaka);
+  else {
+    otosakaState.peepUsed = false;
+    otosakaState.defendUsed = false;
+  }
+  rectangleSelection = null;
+  pendingPeepRect = null;
+  proxyPropUse = null;
+  renderer.clearTemporaryCells();
   bellPlayedAt = new Set();
   roundNumber.textContent = currentRound;
   showRoundResults = false;
@@ -476,6 +512,12 @@ function handleRoundPause(body) {
   playback.finally(() => {
     if (Number(body.countdownSeconds) >= 0) startCountdown(Number(body.countdownSeconds));
   });
+}
+
+function handleSkillAnimation(body = {}) {
+  const animations = Array.isArray(body.animations) ? body.animations : [];
+  if (!animations.length) return;
+  playAnimationSequence(animations);
 }
 
 function handleTimerStyle(body) {
@@ -833,6 +875,159 @@ function showConfirmDialog({ title, text = "", confirmText = "\u786e\u8ba4", can
   });
 }
 
+function handleOtosakaState(body = {}) {
+  otosakaState = {
+    ...otosakaState,
+    present: Boolean(body.present ?? otosakaState.present),
+    canDefend: Boolean(body.canDefend ?? otosakaState.canDefend),
+    peepUsed: Boolean(body.peepUsed ?? otosakaState.peepUsed),
+    defendUsed: Boolean(body.defendUsed ?? otosakaState.defendUsed),
+    activeOwnerIds: Array.isArray(body.activeOwnerIds) ? body.activeOwnerIds : (otosakaState.activeOwnerIds || []),
+  };
+  updateActionButtons();
+}
+
+function handlePropUseLock(body = {}) {
+  if (body.playerId !== myId) return;
+  propUseLocked = Boolean(body.locked);
+  updateActionButtons();
+}
+
+async function startOtosakaDefend() {
+  if (defendExpireSeconds() <= 0 || otosakaState.defendUsed) return;
+  const confirmed = await showConfirmDialog({
+    title: "请选取一格邀请学生会进行防守",
+    text: "取消则不发动防守。",
+    confirmText: "开始选择",
+    cancelText: "取消",
+  });
+  if (!confirmed) return;
+  pendingTargetUse = { mode: "otosaka_defend" };
+  addNotice({ title: "学生会防守", text: "请选择一个战利品仓格子。", show: false, message: [] });
+}
+
+async function startOtosakaPeep() {
+  if (peepUnlockSeconds() > 0 || otosakaState.peepUsed) return;
+  const confirmed = await showConfirmDialog({
+    title: "请依次选择矩形区域的两个顶点",
+    text: "取消则不发动窥视。",
+    confirmText: "开始选择",
+    cancelText: "取消",
+  });
+  if (!confirmed) return;
+  rectangleSelection = { mode: "otosaka_peep", first: null };
+  renderer.clearTemporaryCells();
+  addNotice({ title: "Otosaka 窥视", text: "请选择矩形区域的第一个顶点。", show: false, message: [] });
+}
+
+function handleRectangleSelectionClick(cell) {
+  if (!rectangleSelection.first) {
+    rectangleSelection.first = cell;
+    renderer.setTemporaryCells(rectangleBorderCells(cell, cell));
+    addNotice({ title: "Otosaka 窥视", text: `已选择第一个端点(${cell.x},${cell.y})，请选择第二个端点。`, show: false, message: [] });
+    return;
+  }
+  const first = rectangleSelection.first;
+  pendingPeepRect = normalizeRect(rectangleSelection.first, cell);
+  renderer.setTemporaryCells(rectangleBorderCells(rectangleSelection.first, cell));
+  rectangleSelection = null;
+  addNotice({
+    title: "Otosaka 窥视",
+    text: `已选择第二个端点(${cell.x},${cell.y})，矩形区域已确定。`,
+    show: true,
+    message: rectangleBorderCells(first, cell).map((entry) => ({ type: "cell_highlight", x: entry.x, y: entry.y })),
+  });
+  showOtosakaTargetDialog();
+}
+
+function showOtosakaTargetDialog() {
+  const rows = currentPlayers.filter((player) => player.id !== myId);
+  topOverlay.hidden = false;
+  topOverlay.innerHTML = `
+    <div class="overlay-card prediction-card">
+      <strong>选择窥视目标</strong>
+      <div class="otosaka-target-list">
+        ${rows.map((player, index) => {
+          const character = characterDefinitions[player.characterId] || {};
+          return `<label><input type="radio" name="otosakaTarget" value="${escapeHtml(player.id)}" ${index === 0 ? "checked" : ""} /> <span>${escapeHtml(player.nickname)} - ${escapeHtml(character.name || player.characterId)}</span></label>`;
+        }).join("")}
+      </div>
+      <div class="overlay-actions">
+        <button type="button" data-otosaka-confirm="yes">确认</button>
+        <button type="button" data-otosaka-confirm="no">取消</button>
+      </div>
+    </div>
+  `;
+  topOverlay.querySelectorAll("[data-otosaka-confirm]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const ok = button.dataset.otosakaConfirm === "yes";
+      const targetId = topOverlay.querySelector("input[name='otosakaTarget']:checked")?.value;
+      closeTopOverlay(false);
+      renderer.clearTemporaryCells();
+      if (ok && pendingPeepRect && targetId) {
+        socket?.send(JSON.stringify({ type: "otosaka_peep", rect: pendingPeepRect, targetPlayerId: targetId }));
+        otosakaState.peepUsed = true;
+        updateActionButtons();
+      }
+      pendingPeepRect = null;
+    });
+  });
+}
+
+function showOtosakaProxyPropDialog(body = {}) {
+  proxyPropUse = { targetPlayerId: body.targetPlayerId, expiresAt: Date.now() + Math.max(1, Number(body.seconds || 10)) * 1000 };
+  const props = body.props || [];
+  const render = () => {
+    const remain = Math.max(0, Math.ceil((proxyPropUse.expiresAt - Date.now()) / 1000));
+    if (remain <= 0) {
+      closeTopOverlay(false);
+      proxyPropUse = null;
+      return;
+    }
+    topOverlay.hidden = false;
+    topOverlay.innerHTML = `
+      <div class="overlay-card proxy-prop-card">
+        <button class="overlay-close" type="button" aria-label="关闭">×</button>
+        <strong>代替 ${escapeHtml(body.targetNickname || "目标玩家")} 使用道具</strong>
+        <span>剩余 ${remain} 秒</span>
+        <div class="prop-choices proxy-prop-choices">
+          ${props.map((prop, index) => {
+            if (!prop) return "";
+            const def = propDefinitions[prop.id] || {};
+            const name = def.name || prop.id;
+            return `<button class="prop-choice" type="button" data-slot="${index}" title="${escapeHtml(def.description || "")}" style="--prop-bg:${propColor(def)}">
+              ${def.image ? `<img src="${def.image}" alt="${escapeHtml(name)}" />` : "<span></span>"}
+              <span><strong>${escapeHtml(name)} Lv.${prop.level || def.level || 1}</strong><span>${escapeHtml(def.description || "")}</span></span>
+            </button>`;
+          }).join("") || "<p>目标玩家没有可用道具</p>"}
+        </div>
+      </div>
+    `;
+    topOverlay.querySelector(".overlay-close")?.addEventListener("click", () => {
+      proxyPropUse = null;
+      closeTopOverlay(false);
+    });
+    topOverlay.querySelectorAll(".prop-choice").forEach((button) => {
+      button.addEventListener("click", () => {
+        const slot = Number(button.dataset.slot);
+        const prop = props[slot];
+        if (!prop) return;
+        closeTopOverlay(false);
+        if (requiresTarget(prop.id)) {
+          pendingTargetUse = { mode: "otosaka_proxy_prop", targetPlayerId: body.targetPlayerId, slot, propId: prop.id };
+          addNotice({ title: "代用道具", text: "请选择一个战利品仓格子。", show: false, message: [] });
+        } else {
+          sendOtosakaProxyProp(body.targetPlayerId, slot);
+        }
+      });
+    });
+    setTimeout(() => {
+      if (proxyPropUse && topOverlay.querySelector(".proxy-prop-card")) render();
+    }, 1000);
+  };
+  render();
+}
+
 function startCountdown(seconds) {
   stopCountdown();
   remainingSeconds = Math.max(0, Math.ceil(Number(seconds) || 0));
@@ -859,7 +1054,7 @@ function stopCountdown() {
 function updateTimer() {
   const value = Math.max(0, remainingSeconds);
   document.querySelector("#timer").textContent = value;
-  updateTransformCountdown();
+  updateActiveSkillCountdown();
   if ((value === 10 || value === 5) && !bellPlayedAt.has(value)) {
     bellPlayedAt.add(value);
     playSound("bell", "ogg");
@@ -875,7 +1070,7 @@ function handlePropSlots(body) {
 }
 
 function sendUseProp(slot, target = null) {
-  if (propUsePending || hasBidThisRound || actionLockedThisRound || animationDepth > 0) return;
+  if (propUsePending || hasBidThisRound || actionLockedThisRound || propUseLocked || animationDepth > 0) return;
   propUsePending = true;
   updateActionButtons();
   socket?.send(JSON.stringify({ type: "use_prop", slot, target }));
@@ -885,7 +1080,22 @@ function completeTargetUse(cell) {
   const pending = pendingTargetUse;
   pendingTargetUse = null;
   if (!pending) return;
+  if (pending.mode === "otosaka_defend") {
+    socket?.send(JSON.stringify({ type: "otosaka_defend", target: cell }));
+    otosakaState.defendUsed = true;
+    updateActionButtons();
+    return;
+  }
+  if (pending.mode === "otosaka_proxy_prop") {
+    sendOtosakaProxyProp(pending.targetPlayerId, pending.slot, cell);
+    return;
+  }
   sendUseProp(pending.slot, cell);
+}
+
+function sendOtosakaProxyProp(targetPlayerId, slot, target = null) {
+  proxyPropUse = null;
+  socket?.send(JSON.stringify({ type: "otosaka_proxy_prop", targetPlayerId, slot, target }));
 }
 
 function requiresTarget(id) {
@@ -896,10 +1106,10 @@ async function sendBid(amount, { skipPredictionConfirm = false } = {}) {
   if (hasBidThisRound || actionLockedThisRound) return;
   if (isMakora && predictionAvailable && !predictionSubmittedThisRound && !skipPredictionConfirm) {
     const confirmed = await showConfirmDialog({
-      title: "确认直接出价？",
-      text: "你还没有提交本回合预测。不发动预测将使用默认预测结果。",
-      confirmText: "继续出价",
-      cancelText: "返回",
+      title: "\u786e\u8ba4\u76f4\u63a5\u51fa\u4ef7\uff1f",
+      text: "\u4f60\u8fd8\u6ca1\u6709\u63d0\u4ea4\u672c\u56de\u5408\u9884\u6d4b\u3002\u4e0d\u53d1\u52a8\u9884\u6d4b\u5c06\u4f7f\u7528\u9ed8\u8ba4\u9884\u6d4b\u7ed3\u679c\u3002",
+      confirmText: "\u7ee7\u7eed\u51fa\u4ef7",
+      cancelText: "\u8fd4\u56de",
     });
     if (!confirmed || hasBidThisRound || actionLockedThisRound) return;
   }
@@ -912,20 +1122,9 @@ async function sendBid(amount, { skipPredictionConfirm = false } = {}) {
 
 function updateActionButtons() {
   document.querySelector("#bidButton").disabled = hasBidThisRound || actionLockedThisRound || animationDepth > 0;
-  document.querySelector("#useItemButton").disabled = hasBidThisRound || actionLockedThisRound || propUsePending || propUsesThisRound >= maxPropUsesThisRound || animationDepth > 0;
-  if (predictButton) {
-    predictButton.hidden = !(isMakora && predictionAvailable);
-    predictButton.disabled = hasBidThisRound || actionLockedThisRound || !predictionAvailable || predictionSubmittedThisRound || animationDepth > 0;
-  }
-  if (transformButton) {
-    transformButton.hidden = !(isReiner && !reinerTransformed);
-    transformButton.disabled = !canUseReinerTransform();
-    updateTransformCountdown();
-  }
-  if (secretWordButton) {
-    secretWordButton.hidden = !secretWordState.available;
-    secretWordButton.disabled = !secretWordState.available || secretWordState.submitted || hasBidThisRound || actionLockedThisRound || animationDepth > 0;
-  }
+  document.querySelector("#useItemButton").disabled = hasBidThisRound || actionLockedThisRound || propUseLocked || propUsePending || propUsesThisRound >= maxPropUsesThisRound || animationDepth > 0;
+  rebuildActiveSkills();
+  renderActiveSkill();
 }
 
 function canUseReinerTransform() {
@@ -937,9 +1136,97 @@ function transformRemainingSeconds() {
   return Math.max(0, Math.floor(remainingSeconds - Math.ceil(roundInitialSeconds / 2)));
 }
 
-function updateTransformCountdown() {
-  if (!transformCountdown) return;
-  transformCountdown.textContent = String(transformRemainingSeconds());
+function peepUnlockSeconds() {
+  return Math.max(0, Math.floor(remainingSeconds - Math.floor(roundInitialSeconds / 2)));
+}
+
+function defendExpireSeconds() {
+  return Math.max(0, Math.floor(remainingSeconds - Math.ceil(roundInitialSeconds / 2)));
+}
+
+function rebuildActiveSkills() {
+  const skills = [];
+  const me = currentPlayers.find((player) => player.id === myId);
+  if (isMakora && predictionAvailable) {
+    skills.push({
+      id: "makora_predict",
+      icon: "/resource/wheel.png",
+      title: "Makora 出价预测",
+      disabled: hasBidThisRound || actionLockedThisRound || predictionSubmittedThisRound || animationDepth > 0,
+      run: () => showMegumiPrediction(predictionAvailable, { closable: true }),
+    });
+  }
+  if (isReiner && !reinerTransformed) {
+    skills.push({
+      id: "reiner_transform",
+      icon: "/resource/transform.webp",
+      title: "Reiner 变身",
+      countdown: transformRemainingSeconds(),
+      disabled: !canUseReinerTransform(),
+      run: () => {
+        if (!canUseReinerTransform()) return;
+        socket?.send(JSON.stringify({ type: "reiner_transform" }));
+      },
+    });
+  }
+  if (secretWordState.available) {
+    skills.push({
+      id: "pucci_secret",
+      icon: "/resource/green_baby.webp",
+      title: "Pucci 密语",
+      disabled: secretWordState.submitted || hasBidThisRound || actionLockedThisRound || animationDepth > 0,
+      run: () => showSecretWordDialog(),
+    });
+  }
+  if (otosakaState.canDefend && !otosakaState.defendUsed) {
+    const countdown = defendExpireSeconds();
+    skills.push({
+      id: "otosaka_defend",
+      icon: "/resource/defend.webp",
+      title: "学生会防守",
+      countdown,
+      disabled: hasBidThisRound || actionLockedThisRound || animationDepth > 0 || countdown <= 0,
+      run: startOtosakaDefend,
+    });
+  }
+  if ((me?.characterId === "character_23" || (otosakaState.activeOwnerIds || []).includes(myId)) && !otosakaState.peepUsed) {
+    const countdown = peepUnlockSeconds();
+    skills.push({
+      id: "otosaka_peep",
+      icon: "/resource/peep.webp",
+      title: "Otosaka 窥视",
+      countdown,
+      disabled: hasBidThisRound || actionLockedThisRound || animationDepth > 0 || countdown > 0,
+      run: startOtosakaPeep,
+    });
+  }
+  activeSkills = skills;
+  if (activeSkillIndex >= activeSkills.length) activeSkillIndex = Math.max(0, activeSkills.length - 1);
+}
+
+function renderActiveSkill() {
+  const skill = activeSkills[activeSkillIndex];
+  if (!activeSkillSlot || !activeSkillButton || !activeSkillIcon) return;
+  activeSkillSlot.hidden = !skill;
+  if (!skill) return;
+  activeSkillIcon.src = skill.icon;
+  activeSkillButton.title = skill.title || "主动技能";
+  activeSkillButton.disabled = Boolean(skill.disabled);
+  activeSkillCountdown.textContent = Number.isFinite(skill.countdown) ? String(skill.countdown) : "";
+  activeSkillCountdown.hidden = !Number.isFinite(skill.countdown);
+  activeSkillPager.hidden = activeSkills.length <= 1;
+  activeSkillPage.textContent = `${activeSkillIndex + 1}/${activeSkills.length}`;
+}
+
+function updateActiveSkillCountdown() {
+  rebuildActiveSkills();
+  renderActiveSkill();
+}
+
+function activateCurrentSkill() {
+  const skill = activeSkills[activeSkillIndex];
+  if (!skill || skill.disabled) return;
+  skill.run?.();
 }
 
 async function playRoundEndAnimations(animations) {
@@ -990,8 +1277,8 @@ async function playSingleAnimation(id, durationSeconds, token = animationRunToke
   if (token !== animationRunToken) return;
   const overlay = createAnimationOverlay();
   showAnimationLoading(overlay, id);
-  if (id === 1 || id === 2 || id === 3 || id === 6 || id === 8 || id === 9) {
-    const className = id >= 6 ? "centered-webp" : "fullscreen-animation";
+  if (id === 1 || id === 2 || id === 3 || id === 6 || id === 8 || id === 9 || id === 11) {
+    const className = id === 1 || id === 2 || id === 3 || id === 11 ? "fullscreen-animation" : "centered-webp";
     const [img, audio] = await Promise.all([
       createLoadedAnimationImage(animationImageSrc(id), className, { freshObjectUrl: true }),
       createReadyAnimationAudio(id),
@@ -1052,6 +1339,14 @@ async function playSingleAnimation(id, durationSeconds, token = animationRunToke
     dim.className = "animation-dim-layer";
     overlay.replaceChildren(dim, img);
     setTimeout(() => currentAnimationOverlay === overlay && startPreparedAnimationAudio(audio), 500);
+    return wait(durationSeconds * 1000);
+  }
+  if (id === 12) {
+    const img = await createLoadedAnimationImage(animationImageSrc(12), "fade-center-animation-image", { freshObjectUrl: true });
+    if (token !== animationRunToken) return;
+    const dim = document.createElement("div");
+    dim.className = "animation-dim-layer";
+    overlay.replaceChildren(dim, img);
     return wait(durationSeconds * 1000);
   }
   return wait(durationSeconds * 1000);
@@ -1174,10 +1469,9 @@ function preloadAnimation(id) {
   const key = Number(id);
   if (animationPreloadPromises.has(key)) return animationPreloadPromises.get(key);
   addAnimationPreloadLinks(key);
-  const promise = Promise.all([
-    ...animationImageSources(key).map((src) => preloadAnimationImage(src)),
-    preloadAnimationAudio(key),
-  ]).then(() => true).catch(() => false);
+  const tasks = animationImageSources(key).map((src) => preloadAnimationImage(src));
+  if (animationHasAudio(key)) tasks.push(preloadAnimationAudio(key));
+  const promise = Promise.all(tasks).then(() => true).catch(() => false);
   animationPreloadPromises.set(key, promise);
   return promise;
 }
@@ -1276,7 +1570,7 @@ function getAnimationAssetUrl(src) {
 
 function addAnimationPreloadLinks(id) {
   for (const src of animationImageSources(id)) addPreloadLink(src, "image");
-  addPreloadLink(animationAudioSrc(id), "audio");
+  if (animationHasAudio(id)) addPreloadLink(animationAudioSrc(id), "audio");
 }
 
 function addPreloadLink(src, asType) {
@@ -1293,6 +1587,7 @@ function addPreloadLink(src, asType) {
 }
 
 function animationImageSrc(id) {
+  if (Number(id) === 12) return "/resource/animation/outanimation_12.webp";
   return `/resource/animation/animation_${id}.webp`;
 }
 
@@ -1303,6 +1598,10 @@ function animationImageSources(id) {
 
 function animationAudioSrc(id) {
   return `/resource/animation/animation_${id}.mp3`;
+}
+
+function animationHasAudio(id) {
+  return Number(id) !== 12;
 }
 
 function stopCurrentAnimation() {
@@ -1404,6 +1703,28 @@ function chineseUnit(value) {
     return `${wan}\u4e07${rest ? rest : ""}`;
   }
   return String(value);
+}
+
+function normalizeRect(a, b) {
+  const x1 = Math.min(Number(a.x), Number(b.x));
+  const y1 = Math.min(Number(a.y), Number(b.y));
+  const x2 = Math.max(Number(a.x), Number(b.x));
+  const y2 = Math.max(Number(a.y), Number(b.y));
+  return { x1, y1, x2, y2 };
+}
+
+function rectangleBorderCells(a, b) {
+  const rect = normalizeRect(a, b);
+  const cells = [];
+  for (let x = rect.x1; x <= rect.x2; x += 1) {
+    cells.push({ x, y: rect.y1 });
+    if (rect.y2 !== rect.y1) cells.push({ x, y: rect.y2 });
+  }
+  for (let y = rect.y1 + 1; y < rect.y2; y += 1) {
+    cells.push({ x: rect.x1, y });
+    if (rect.x2 !== rect.x1) cells.push({ x: rect.x2, y });
+  }
+  return cells;
 }
 
 function shortNumber(value) {

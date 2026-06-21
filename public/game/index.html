@@ -18,16 +18,17 @@
       <section class="action-panel">
         <div class="timer" id="timer">60</div>
         <button type="button" id="useItemButton">使用道具</button>
-        <button type="button" id="predictButton" title="Makora 出价预测" hidden>
-          <img src="/resource/wheel.png" alt="" />
-        </button>
-        <button type="button" id="transformButton" title="Reiner 变身" hidden>
-          <span id="transformCountdown">0</span>
-          <img src="/resource/transform.webp" alt="" />
-        </button>
-        <button type="button" id="secretWordButton" title="Pucci 密语" hidden>
-          <img src="/resource/green_baby.webp" alt="" />
-        </button>
+        <div class="active-skill-slot" id="activeSkillSlot" hidden>
+          <button type="button" id="activeSkillButton" title="主动技能">
+            <span id="activeSkillCountdown"></span>
+            <img id="activeSkillIcon" src="" alt="" />
+          </button>
+          <div class="active-skill-pager" id="activeSkillPager" hidden>
+            <button type="button" data-page="prev" aria-label="上一个主动技能">◀</button>
+            <span id="activeSkillPage">1/1</span>
+            <button type="button" data-page="next" aria-label="下一个主动技能">▶</button>
+          </div>
+        </div>
         <button type="button" id="bidButton">出价</button>
       </section>
 
@@ -43,6 +44,9 @@
         <div class="warehouse-scroll">
           <canvas id="warehouseCanvas"></canvas>
           <div class="canvas-tooltip" id="canvasTooltip" hidden></div>
+        </div>
+        <div class="warehouse-foot">
+          <span id="pointerCoord" hidden>当前指针 (0,0)</span>
         </div>
       </aside>
 

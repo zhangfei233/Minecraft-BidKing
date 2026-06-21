@@ -19,6 +19,7 @@ export class WarehouseCanvas {
     this.cellRarities = new Map();
     this.fullItems = new Map();
     this.highlightCells = [];
+    this.temporaryCells = [];
     this.highlightTimer = null;
     this.onValueChange = null;
     this.favoriteItemIds = new Set();
@@ -51,6 +52,7 @@ export class WarehouseCanvas {
     this.cellRarities.clear();
     this.fullItems.clear();
     this.highlightCells = [];
+    this.temporaryCells = [];
     this.render();
   }
 
@@ -147,6 +149,16 @@ export class WarehouseCanvas {
     }, durationMs);
   }
 
+  setTemporaryCells(cells = []) {
+    this.temporaryCells = Array.isArray(cells) ? cells : [];
+    this.render();
+  }
+
+  clearTemporaryCells() {
+    this.temporaryCells = [];
+    this.render();
+  }
+
   queryForCell(x, y) {
     const item = this.findKnownItemAt(x, y);
     const params = new URLSearchParams();
@@ -222,7 +234,7 @@ export class WarehouseCanvas {
     this.ctx.fillStyle = "#ff2f55";
     this.ctx.font = `700 ${Math.max(18, Math.floor(this.cellSize * 0.36))}px serif`;
     this.ctx.textBaseline = "bottom";
-    this.ctx.fillText("♥", x + 6, y + height - 6);
+    this.ctx.fillText("\u2665", x + 6, y + height - 6);
     this.ctx.restore();
   }
 
@@ -280,6 +292,11 @@ export class WarehouseCanvas {
     this.ctx.lineWidth = 5;
     for (const cell of this.highlightCells) {
       this.ctx.strokeRect(cell.x * this.cellSize + 2, cell.y * this.cellSize + 2, this.cellSize - 4, this.cellSize - 4);
+    }
+    this.ctx.strokeStyle = "#1cff54";
+    this.ctx.lineWidth = 4;
+    for (const cell of this.temporaryCells) {
+      this.ctx.strokeRect(cell.x * this.cellSize + 3, cell.y * this.cellSize + 3, this.cellSize - 6, this.cellSize - 6);
     }
   }
 
@@ -390,18 +407,18 @@ function splitTypes(typeText) {
 }
 
 const typeLabels = {
-  decoration: "装饰",
-  ore: "矿物",
-  tool: "工具",
-  equipment: "装备",
-  natural: "自然",
-  food: "食物",
-  tech: "科技",
-  magic: "魔法",
-  mob: "生物",
-  book: "书",
-  multiblock: "多方块",
-  loot: "战利品",
+  decoration: "\u88c5\u9970",
+  ore: "\u77ff\u7269",
+  tool: "\u5de5\u5177",
+  equipment: "\u88c5\u5907",
+  natural: "\u81ea\u7136",
+  food: "\u98df\u7269",
+  tech: "\u79d1\u6280",
+  magic: "\u9b54\u6cd5",
+  mob: "\u751f\u7269",
+  book: "\u4e66\u7c4d",
+  multiblock: "\u591a\u65b9\u5757",
+  loot: "\u6218\u5229\u54c1",
 };
 
 function labelTypes(typeText) {
@@ -411,6 +428,8 @@ function labelTypes(typeText) {
 }
 
 function hintToCells(hint) {
+  if (!hint) return [];
+  if (hint.type === "cell_highlight") return [{ x: hint.x, y: hint.y }];
   if (hint.type === "cell_rarity") return [{ x: hint.x, y: hint.y }];
   if (Number.isInteger(hint.x) && Number.isInteger(hint.y) && hint.width && hint.height) {
     const cells = [];

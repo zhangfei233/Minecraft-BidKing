@@ -37,6 +37,8 @@ const ANIMATION_SECONDS = {
   8: 10.25,
   9: 10,
   10: 5,
+  11: 7.25,
+  12: 2,
 };
 const HEARTBEAT_TIMEOUT_MS = 45_000;
 const GAME_RECONNECT_GRACE_MS = 60_000;
@@ -262,6 +264,12 @@ export class GameSession {
         player.characterState.omenTotalByPlayer = {};
         player.characterState.omenActive = {};
       }
+      if (player.characterId === "character_23") {
+        player.characterState.otosakaPeepUsedRounds = [];
+        player.characterState.otosakaPossession = {};
+        player.characterState.otosakaStolenCharacterIds = [];
+      }
+      player.characterState.otosakaDefenseCells = player.characterState.otosakaDefenseCells || [];
     }
   }
 
@@ -303,12 +311,14 @@ export class GameSession {
       player.propUsesThisRound = 0;
       player.submitted[round - 1] = Boolean(player.disconnected);
       player.bids[round - 1] = player.disconnected ? 0 : null;
+      player.characterState.otosakaPeepUsedThisRound = false;
+      player.characterState.otosakaDefendUsedThisRound = false;
       this.applyRoundStartCharacterProps(player, round);
       this.applyRoundStartEffectIcons(player, round);
     }
     if (round === 5) {
       for (const player of this.players) {
-        if (player.characterId === "character_15") this.emitGojoRoundHint(player);
+        if (this.playerHasCharacterPower(player, "character_15")) this.emitGojoRoundHint(player);
       }
     }
     this.applyRoundStartDomains(round);
@@ -320,6 +330,7 @@ export class GameSession {
           countdownSeconds: this.clientCountdownSecondsFor(roundMs),
           roundInitialSeconds: this.clientCountdownSecondsFor(roundMs),
           actionLocked: this.actionLockedPlayerIds.has(player.id),
+          otosaka: this.otosakaPublicState(player),
         },
       });
     }
@@ -336,7 +347,7 @@ export class GameSession {
         this.emitCharacterStartHint(player);
         if (characterHasRoundOneEffect(player.characterId)) this.emitCharacterRoundHint(player);
       } else {
-        if (round === 5 && player.characterId === "character_15") continue;
+        if (round === 5 && this.playerHasCharacterPower(player, "character_15")) continue;
         this.emitCharacterRoundHint(player);
       }
     }
@@ -364,6 +375,10 @@ export class GameSession {
     if (characterIds.has("character_22")) {
       ids.add(6);
       ids.add(7);
+    }
+    if (characterIds.has("character_23")) {
+      ids.add(11);
+      ids.add(12);
     }
     if (characterIds.has("character_14") && characterIds.has("character_15")) ids.add(10);
     if (!ids.size) return;
@@ -424,6 +439,26 @@ export class GameSession {
       this.broadcast({ type: "set_round_timer", body: { countdownSeconds: this.currentCountdownSeconds() } });
     }, ms);
     this.pauseTimer.unref?.();
+  }
+
+  emitSkillAnimationWindow(kind, { source = null, target = null, animations = [] } = {}) {
+    const resolvedAnimations = animations.length ? animations : skillAnimationsForKind(kind);
+    if (resolvedAnimations.length && !this.finished && this.roundEndsAt) {
+      const seconds = resolvedAnimations.reduce((sum, animation) => {
+        return sum + Number(animation.durationSeconds || ANIMATION_SECONDS[animation.id] || 0);
+      }, 0);
+      this.pauseRoundTime({ seconds, animations: resolvedAnimations });
+      return;
+    }
+    this.broadcast({
+      type: "skill_animation",
+      body: {
+        kind,
+        sourceId: source?.id || null,
+        targetId: target?.id || null,
+        animations: resolvedAnimations,
+      },
+    });
   }
 
   emitSystemPublicHint({ force = false } = {}) {
@@ -575,7 +610,7 @@ export class GameSession {
   roundEndAnimations(roundIndex) {
     if (roundIndex !== 3) return [];
     const triggered = this.players.filter((player) => (
-      player.characterId === "character_14"
+      this.playerHasCharacterPower(player, "character_14")
       && [0, 1, 2].every((index) => (player.bids[index] || 0) === 0)
     ));
     return triggered.map((_, index) => ({
@@ -589,7 +624,7 @@ export class GameSession {
     if (roundIndex !== 3) return {};
     const result = {};
     for (const sukuna of this.players) {
-      if (sukuna.characterId !== "character_14") continue;
+      if (!this.playerHasCharacterPower(sukuna, "character_14")) continue;
       if (![0, 1, 2].every((index) => (sukuna.bids[index] || 0) === 0)) continue;
       const otherBids = this.players.filter((entry) => entry.id !== sukuna.id).map((entry) => entry.bids[roundIndex] || 0);
       const highest = Math.max(...otherBids);
@@ -633,10 +668,10 @@ export class GameSession {
         expiresAtRoundStart: round + 1,
       });
     }
-    if (player.characterId === "character_21" && player.characterState.megumiMode === "domain" && round >= 2) {
+    if (this.playerHasCharacterPower(player, "character_21") && player.characterState.megumiMode === "domain" && round >= 2) {
       this.updateMegumiDomainIcon(player, round);
     }
-    if (player.characterId === "character_22" && player.characterState.reinerTransformed) {
+    if (this.playerHasCharacterPower(player, "character_22") && player.characterState.reinerTransformed) {
       this.updateReinerTitanIcon(player, round);
     }
   }
@@ -720,6 +755,21 @@ export class GameSession {
       return;
     }
 
+    if (message.type === "otosaka_defend") {
+      this.receiveOtosakaDefend(player, normalizeTarget(message.target));
+      return;
+    }
+
+    if (message.type === "otosaka_peep") {
+      this.receiveOtosakaPeep(player, message.rect, message.targetPlayerId);
+      return;
+    }
+
+    if (message.type === "otosaka_proxy_prop") {
+      this.receiveOtosakaProxyProp(player, message.targetPlayerId, Number(message.slot), message.target ? normalizeTarget(message.target) : null);
+      return;
+    }
+
   }
 
   receiveBid(player, amount) {
@@ -735,11 +785,15 @@ export class GameSession {
     if (this.players.every((entry) => entry.submitted[roundIndex] || entry.disconnected)) this.endRound();
   }
 
-  useProp(player, slot, target = null) {
+  useProp(player, slot, target = null, options = {}) {
     if (this.roundPaused) return;
     const roundIndex = this.round - 1;
     if (this.actionLockedPlayerIds.has(player.id)) {
       this.send(player, { type: "error", message: "本回合无法使用道具" });
+      return;
+    }
+    if (!options.observer && Number(player.characterState.otosakaPropUseLockedUntil || 0) > Date.now()) {
+      this.send(player, { type: "error", message: "学生会接管期间暂时不能使用道具" });
       return;
     }
     if (!Number.isInteger(slot) || slot < 0 || slot >= 5) {
@@ -776,10 +830,16 @@ export class GameSession {
     player.propUsesThisRound += 1;
     player.usedProps[roundIndex] = selected;
     player.props[slot] = null;
-    if (player.characterId === "character_17") this.tryGrantPendingExclusive(player);
+    if (this.playerHasCharacterPower(player, "character_17")) this.tryGrantPendingExclusive(player);
     this.send(player, { type: "prop_slots", body: { props: player.props, uses: player.propUsesThisRound, maxUses: maxPropUsesFor(player) } });
     if (hint) hint.icon = this.allPropDefinitions.get(selected.id)?.image || "";
     this.send(player, hint);
+    if (options.observer && hint && selected.id !== "sp_prop2") {
+      const observerHint = this.copyHintPackageToPlayer(hint, options.observer, {
+        title: `角色技能：代用${this.allPropDefinitions.get(selected.id)?.name || selected.id}`,
+      });
+      if (observerHint) this.send(options.observer, observerHint);
+    }
   }
 
   useSpecialProp(player, selected, target) {
@@ -790,7 +850,7 @@ export class GameSession {
   }
 
   receiveReinerTransform(player) {
-    if (player.characterId !== "character_22") return;
+    if (!this.playerHasCharacterPower(player, "character_22")) return;
     if (this.roundPaused || this.actionLockedPlayerIds.has(player.id)) return;
     if (player.characterState.reinerTransformed) return;
     const roundIndex = this.round - 1;
@@ -828,7 +888,7 @@ export class GameSession {
       type: "hint",
       title: "\u89d2\u8272\u6280\u80fd",
       text: "Reiner变身铠之巨人，显示所有占格数大于9的战利品轮廓。",
-      icon: this.characterDefinitions.get(player.characterId)?.image || "",
+      icon: this.characterPowerIcon(player, "character_22"),
       show: privateMessage.length > 0,
       message: privateMessage,
     });
@@ -838,7 +898,7 @@ export class GameSession {
         type: "hint",
         title: "\u89d2\u8272\u6280\u80fd",
         text: `Reiner玩家${player.nickname}变身铠之巨人，向全体揭示一件高价值物品`,
-        icon: this.characterDefinitions.get(player.characterId)?.image || "",
+        icon: this.characterPowerIcon(player, "character_22"),
         show: message.length > 0,
         message,
       });
@@ -846,24 +906,347 @@ export class GameSession {
     this.broadcastPublicState({ clearBidState: false });
   }
 
+  receiveOtosakaDefend(player, target) {
+    if (!this.playerCanOtosakaDefend(player)) return;
+    if (this.roundPaused || this.finished || player.submitted[this.round - 1]) return;
+    if (player.characterState.otosakaDefendUsedThisRound) return;
+    const remaining = Math.max(0, this.roundEndsAt - Date.now());
+    if (remaining <= this.currentRoundDurationMs / 2) {
+      this.send(player, { type: "error", message: "已超过本回合前半段，无法布防" });
+      return;
+    }
+    const cell = { x: target.x, y: target.y, round: this.round };
+    player.characterState.otosakaDefendUsedThisRound = true;
+    player.characterState.otosakaDefenseCells = [...(player.characterState.otosakaDefenseCells || []), cell];
+    const message = (player.characterState.otosakaDefenseCells || []).map((entry) => ({ type: "cell_highlight", x: entry.x, y: entry.y }));
+    this.send(player, {
+      type: "hint",
+      title: "学生会防守",
+      text: `已在(${cell.x},${cell.y})布防。`,
+      icon: "/resource/defend.webp",
+      show: message.length > 0,
+      message,
+    });
+    this.send(player, { type: "otosaka_state", body: this.otosakaPublicState(player) });
+  }
+
+  receiveOtosakaPeep(player, rectInput, targetPlayerId) {
+    if (!this.playerHasOtosakaPeep(player)) return;
+    if (this.roundPaused || this.finished || player.submitted[this.round - 1]) return;
+    if (player.characterState.otosakaPeepUsedThisRound) return;
+    const remaining = Math.max(0, this.roundEndsAt - Date.now());
+    if (remaining > this.currentRoundDurationMs / 2) {
+      this.send(player, { type: "error", message: "尚未进入本回合后一半时间，无法窥视" });
+      return;
+    }
+    const target = this.playersById.get(String(targetPlayerId || ""));
+    if (!target || target.id === player.id) {
+      this.send(player, { type: "error", message: "窥视目标无效" });
+      return;
+    }
+    const rect = normalizeRect(rectInput);
+    player.characterState.otosakaPeepUsedThisRound = true;
+    const defended = (target.characterState.otosakaDefenseCells || []).some((cell) => rectContains(rect, cell.x, cell.y));
+    if (defended) {
+      player.characterState.otosakaPenaltyMultiplier = Number(player.characterState.otosakaPenaltyMultiplier || 1) * 0.95;
+      this.addEffectIcon(player, {
+        key: "otosaka-defense-penalty",
+        icon: "/resource/defend.webp",
+        text: "窥视遭到学生会防守：出价在竞价时视为x0.95",
+      });
+      this.emitSkillAnimationWindow("otosaka_peep_blocked", { source: player, target });
+      this.send(player, characterTextHint("窥视失败，遭到学生会防守，获得持续整局的-5%竞价倍率。", this.characterDefinitions.get(player.characterId)?.image));
+      this.send(player, { type: "otosaka_state", body: this.otosakaPublicState(player) });
+      this.broadcastPublicState({ clearBidState: false });
+      return;
+    }
+
+    const sync = this.copyTargetViewInRect(target, player, rect);
+    this.send(player, {
+      type: "hint",
+      title: "角色技能",
+      text: `短暂窥视${target.nickname}，获取其在矩形区域内掌握的信息。`,
+      icon: this.characterPowerIcon(player),
+      show: sync.highlight.length > 0,
+      message: sync.message.length > 0 ? sync.message : sync.highlight,
+    });
+    this.recordOtosakaPeep(player, target, rect);
+    this.tryOtosakaPossession(player, target);
+    const roundIndex = this.round - 1;
+    if (!target.usedProps[roundIndex] && target.propUsesThisRound < maxPropUsesFor(target) && !target.submitted[roundIndex]) {
+      this.beginOtosakaProxyProp(player, target);
+    }
+    this.send(player, { type: "otosaka_state", body: this.otosakaPublicState(player) });
+    this.broadcastPublicState({ clearBidState: false });
+  }
+
+  beginOtosakaProxyProp(source, target) {
+    const until = Date.now() + 10_000;
+    target.characterState.otosakaPropUseLockedUntil = until;
+    this.send(target, { type: "prop_use_lock", body: { playerId: target.id, locked: true, seconds: 10 } });
+    this.send(source, {
+      type: "otosaka_proxy_prop_request",
+      body: {
+        targetPlayerId: target.id,
+        targetNickname: target.nickname,
+        props: target.props,
+        seconds: 10,
+      },
+    });
+    setTimeout(() => {
+      if (target.characterState.otosakaPropUseLockedUntil !== until) return;
+      target.characterState.otosakaPropUseLockedUntil = 0;
+      this.send(target, { type: "prop_use_lock", body: { playerId: target.id, locked: false } });
+    }, 10_000).unref?.();
+  }
+
+  receiveOtosakaProxyProp(source, targetPlayerId, slot, targetCell = null) {
+    const target = this.playersById.get(String(targetPlayerId || ""));
+    if (!target || target.id === source.id) return;
+    if (Date.now() > Number(target.characterState.otosakaPropUseLockedUntil || 0)) return;
+    target.characterState.otosakaPropUseLockedUntil = 0;
+    this.send(target, { type: "prop_use_lock", body: { playerId: target.id, locked: false } });
+    this.useProp(target, slot, targetCell, { observer: source });
+  }
+
+  hasOtosakaInGame() {
+    return this.players.some((player) => this.playerHasOtosakaPeep(player));
+  }
+
+  playerHasOtosakaPeep(player) {
+    if (!player || player.characterState.stolenByOtosakaId) return false;
+    return player.characterId === "character_23" || (player.characterState.otosakaStolenCharacterIds || []).length > 0;
+  }
+
+  playerCanOtosakaDefend(player) {
+    if (!player || player.characterState.stolenByOtosakaId) return false;
+    return this.players.some((entry) => entry.id !== player.id && this.playerHasOtosakaPeep(entry));
+  }
+
+  playerHasCharacterPower(player, characterId) {
+    if (!player) return false;
+    if (player.characterId === characterId && !player.characterState.stolenByOtosakaId) return true;
+    return (player.characterState.otosakaStolenCharacterIds || []).includes(characterId);
+  }
+
+  characterPowerIcon(player, characterId = null) {
+    return this.characterDefinitions.get(characterId || player.characterId)?.image || "";
+  }
+
+  otosakaPublicState(player) {
+    return {
+      present: this.hasOtosakaInGame(),
+      canDefend: this.playerCanOtosakaDefend(player),
+      peepUsed: Boolean(player.characterState.otosakaPeepUsedThisRound),
+      defendUsed: Boolean(player.characterState.otosakaDefendUsedThisRound),
+      activeOwnerIds: this.players.filter((entry) => this.playerHasOtosakaPeep(entry)).map((entry) => entry.id),
+    };
+  }
+
+  copyTargetViewInRect(target, source, rect) {
+    const targetView = this.warehouse.getView(target.gameIndex);
+    const sourceView = this.warehouse.getView(source.gameIndex);
+    const itemIndexes = itemIndexesInRect(this.warehouse, rect);
+    const message = [];
+    const highlight = [];
+    for (const itemIndex of itemIndexes) {
+      const item = this.warehouse.getItemByIndex(itemIndex);
+      if (!item) continue;
+      const targetFull = itemFullInfoKnown(targetView, item);
+      const targetOutline = itemOutlineKnown(targetView, item);
+      const targetRarity = itemRarityKnown(targetView, item);
+      if (targetFull) {
+        highlight.push({ type: "item_full", ...serializableHintItem(item, itemIndex) });
+        if (!itemFullInfoKnown(sourceView, item)) message.push(this.warehouse.addHint(source.gameIndex, { type: "item_full", itemIndex }));
+        continue;
+      }
+      if (targetOutline && targetRarity) {
+        highlight.push({ type: "item_outline_rarity", ...serializableHintItem(item, itemIndex) });
+        if (!itemOutlineKnown(sourceView, item) || !itemRarityKnown(sourceView, item)) {
+          message.push(this.warehouse.addHint(source.gameIndex, { type: "item_outline_rarity", itemIndex }));
+        }
+        continue;
+      }
+      if (targetOutline) {
+        highlight.push({ type: "item_outline", ...serializableHintItem(item, itemIndex) });
+        if (!itemOutlineKnown(sourceView, item)) message.push(this.warehouse.addHint(source.gameIndex, { type: "item_outline", itemIndex }));
+      }
+      if (targetRarity) {
+        const cell = firstKnownRarityCell(targetView, item);
+        if (cell) {
+          highlight.push({ type: "cell_rarity", x: cell.x, y: cell.y, rarity: item.rarity });
+          if (!itemRarityKnown(sourceView, item)) message.push(this.warehouse.addHint(source.gameIndex, { type: "cell_rarity", x: cell.x, y: cell.y }));
+        }
+      }
+    }
+    return { message, highlight };
+  }
+
+  copyHintPackageToPlayer(hint, player, { title = null } = {}) {
+    const sourceMessages = Array.isArray(hint.message) ? hint.message : [];
+    const message = [];
+    for (const entry of sourceMessages) {
+      const itemIndex = Number(entry.itemIndex || this.warehouse.getIndexAt(entry.x, entry.y));
+      const item = itemIndex > 0 ? this.warehouse.getItemByIndex(itemIndex) : null;
+      if (entry.type === "item_full" && item && !itemFullInfoKnown(this.warehouse.getView(player.gameIndex), item)) {
+        message.push(this.warehouse.addHint(player.gameIndex, { type: "item_full", itemIndex }));
+      } else if ((entry.type === "item_outline" || entry.type === "item_outline_rarity") && item) {
+        if (entry.type === "item_outline_rarity" && (!itemOutlineKnown(this.warehouse.getView(player.gameIndex), item) || !itemRarityKnown(this.warehouse.getView(player.gameIndex), item))) {
+          message.push(this.warehouse.addHint(player.gameIndex, { type: "item_outline_rarity", itemIndex }));
+        } else if (entry.type === "item_outline" && !itemOutlineKnown(this.warehouse.getView(player.gameIndex), item)) {
+          message.push(this.warehouse.addHint(player.gameIndex, { type: "item_outline", itemIndex }));
+        }
+      } else if (entry.type === "cell_rarity") {
+        const targetItem = item || this.warehouse.getItemAt(entry.x, entry.y);
+        if (targetItem && !itemRarityKnown(this.warehouse.getView(player.gameIndex), targetItem)) {
+          message.push(this.warehouse.addHint(player.gameIndex, { type: "cell_rarity", x: entry.x, y: entry.y }));
+        }
+      }
+    }
+    if (!message.length) return null;
+    return {
+      type: "hint",
+      title: title || hint.title || "角色技能",
+      text: hint.text || "同步了代用道具获得的信息。",
+      icon: hint.icon || this.characterDefinitions.get(player.characterId)?.image || "",
+      show: true,
+      message,
+    };
+  }
+
+  recordOtosakaPeep(source, target, rect) {
+    if (!source.characterState.otosakaPossession) source.characterState.otosakaPossession = {};
+    const state = source.characterState.otosakaPossession[target.id] || { count: 0, cells: [] };
+    state.count += 1;
+    const knownCells = cellsInRect(rect).filter((cell) => this.warehouse.getIndexAt(cell.x, cell.y) > 0);
+    const existing = new Set(state.cells.map((cell) => `${cell.x},${cell.y}`));
+    for (const cell of knownCells) {
+      const key = `${cell.x},${cell.y}`;
+      if (!existing.has(key)) {
+        state.cells.push(cell);
+        existing.add(key);
+      }
+    }
+    source.characterState.otosakaPossession[target.id] = state;
+  }
+
+  tryOtosakaPossession(source, target) {
+    const state = source.characterState.otosakaPossession?.[target.id];
+    if (!state || state.stolen || state.count < 2) return;
+    const occupiedCells = this.warehouse.items.slice(1).reduce((sum, item) => sum + itemCells(item), 0);
+    if (state.cells.length <= occupiedCells / 2) return;
+    state.stolen = true;
+    const result = this.transferCharacterPower(source, target);
+    this.emitSkillAnimationWindow("otosaka_plunder_success", { source, target });
+    this.broadcastPublicState({ clearBidState: false });
+    const sourceText = result.skillTransferred
+      ? `成功掠夺${target.nickname}的能力。`
+      : `成功掠夺${target.nickname}，但目标没有可转移的技能，仅同步其视野信息。`;
+    const targetText = result.targetWasAlreadyRobbed
+      ? `Otosaka玩家${source.nickname}窥视了你的视野。`
+      : `Otosaka玩家${source.nickname}掠夺了你的能力。`;
+    this.send(source, characterTextHint(sourceText, this.characterDefinitions.get(source.characterId)?.image));
+    this.send(target, characterTextHint(targetText, this.characterDefinitions.get(source.characterId)?.image));
+    this.broadcastOtosakaStates();
+  }
+
+  transferCharacterPower(source, target) {
+    const targetAlreadyRobbed = Boolean(target.characterState.stolenByOtosakaId);
+    const transferableCharacterId = targetAlreadyRobbed || target.characterId === "character_15" || target.characterId === "character_23"
+      ? null
+      : target.characterId;
+    if (transferableCharacterId) {
+      source.characterState.otosakaStolenCharacterIds = [...new Set([...(source.characterState.otosakaStolenCharacterIds || []), transferableCharacterId])];
+    }
+    if (!targetAlreadyRobbed) {
+      target.characterState.stolenByOtosakaId = source.id;
+      target.characterImageOverride = "/resource/characters/Noob.png";
+    }
+    if (transferableCharacterId && target.characterState.madeInHeaven) {
+      source.characterState.madeInHeaven = true;
+      source.characterState.madeInHeavenMultiplier = Math.max(Number(source.characterState.madeInHeavenMultiplier || 1), Number(target.characterState.madeInHeavenMultiplier || 1.3));
+      target.characterState.madeInHeaven = false;
+    }
+    if (transferableCharacterId && target.characterState.domainBidMultiplier) {
+      source.characterState.domainBidMultiplier = { ...(source.characterState.domainBidMultiplier || {}) };
+      for (const [round, value] of Object.entries(target.characterState.domainBidMultiplier)) {
+        if (Number(value) > 1) {
+          source.characterState.domainBidMultiplier[round] = Number(source.characterState.domainBidMultiplier[round] || 1) * Number(value);
+          delete target.characterState.domainBidMultiplier[round];
+        }
+      }
+    }
+    if (transferableCharacterId === "character_21" && target.characterState.megumiMode === "makora") {
+      source.characterState.megumiMode = "makora";
+      source.characterState.megumiPredictions = source.characterState.megumiPredictions || {};
+      for (const entry of this.advantages.entries()) {
+        if (entry.sourceId !== target.id) continue;
+        if (entry.targetId === source.id) this.advantages.values.delete(this.advantages.key(entry.sourceId, entry.targetId));
+        else {
+          const value = entry.value;
+          this.advantages.values.delete(this.advantages.key(entry.sourceId, entry.targetId));
+          this.advantages.add(source.id, entry.targetId, value);
+        }
+      }
+    }
+    if (transferableCharacterId === "character_20" && !target.characterState.madeInHeaven) {
+      source.characterState.pucciTargetIndex = target.characterState.pucciTargetIndex;
+    }
+    if (transferableCharacterId === "character_22") {
+      source.characterState.reinerTransformed = target.characterState.reinerTransformed;
+      source.characterState.reinerChairCount = 0;
+    }
+    if (transferableCharacterId === "character_17") {
+      source.characterState.creeperMatchedRounds = [];
+      source.characterState.creeperMatches = 0;
+      source.characterState.creeperGranted = 0;
+    }
+    const fullSync = this.copyTargetViewInRect(target, source, { x1: 0, y1: 0, x2: this.warehouse.width - 1, y2: Math.max(0, this.warehouse.effectiveRows - 1) });
+    const syncMessage = fullSync.message.length > 0 ? fullSync.message : fullSync.highlight;
+    this.send(source, {
+      type: "hint",
+      title: "角色技能",
+      text: `掠夺成功，同步了${target.nickname}当前掌握的战利品信息。`,
+      icon: this.characterDefinitions.get(source.characterId)?.image || "",
+      show: syncMessage.length > 0,
+      message: syncMessage,
+    });
+    if (transferableCharacterId) {
+      const movedIcons = [];
+      target.effectIcons = (target.effectIcons || []).filter((icon) => {
+        if (icon.text && /x1\.|120%|天堂制造|铠之巨人|嵌合暗翳庭/.test(icon.text)) {
+          movedIcons.push(icon);
+          return false;
+        }
+        return true;
+      });
+      for (const icon of movedIcons) this.addEffectIcon(source, icon, { replaceKey: false });
+    }
+    return { skillTransferred: Boolean(transferableCharacterId), targetWasAlreadyRobbed };
+  }
+
+  broadcastOtosakaStates() {
+    for (const player of this.players) this.send(player, { type: "otosaka_state", body: this.otosakaPublicState(player) });
+  }
+
   applyRoundStartCharacterProps(player, round) {
-    if (player.characterId === "character_17") this.tryGrantPendingExclusive(player);
-    if (player.characterId === "character_18" && round % 2 === 1 && !player.props.some((prop) => prop?.id === "sp_prop2")) {
+    if (this.playerHasCharacterPower(player, "character_17")) this.tryGrantPendingExclusive(player);
+    if (this.playerHasCharacterPower(player, "character_18") && round % 2 === 1 && !player.props.some((prop) => prop?.id === "sp_prop2")) {
       const candidates = player.props.map((prop, slot) => ({ prop, slot })).filter(({ prop }) => prop && !prop.exclusive);
       if (candidates.length) {
         const picked = candidates[Math.floor(this.random() * candidates.length)];
         player.props[picked.slot] = makeTemporaryProp("sp_prop2", this.allPropDefinitions.get("sp_prop2"), { exclusive: true });
-        this.send(player, characterTextHint(`\u5947\u6570\u56de\u5408\u5f00\u59cb\uff0c\u5c06\u9053\u5177\u3010${this.allPropDefinitions.get(picked.prop.id)?.name || picked.prop.id}\u3011\u66ff\u6362\u4e3a\u4e34\u65f6\u4e13\u5c5e\u9053\u5177\u3010\u590d\u5236\u673a\u3011\u3002`, this.characterDefinitions.get(player.characterId)?.image));
+        this.send(player, characterTextHint(`\u5947\u6570\u56de\u5408\u5f00\u59cb\uff0c\u5c06\u9053\u5177\u3010${this.allPropDefinitions.get(picked.prop.id)?.name || picked.prop.id}\u3011\u66ff\u6362\u4e3a\u4e34\u65f6\u4e13\u5c5e\u9053\u5177\u3010\u590d\u5236\u673a\u3011\u3002`, this.characterPowerIcon(player, "character_18")));
         this.send(player, { type: "prop_slots", body: { props: player.props, uses: player.propUsesThisRound || 0, maxUses: maxPropUsesFor(player) } });
       } else {
-        this.send(player, characterTextHint("\u5947\u6570\u56de\u5408\u5f00\u59cb\uff0c\u4f46\u6ca1\u6709\u53ef\u66ff\u6362\u7684\u666e\u901a\u9053\u5177\u3002", this.characterDefinitions.get(player.characterId)?.image));
+        this.send(player, characterTextHint("\u5947\u6570\u56de\u5408\u5f00\u59cb\uff0c\u4f46\u6ca1\u6709\u53ef\u66ff\u6362\u7684\u666e\u901a\u9053\u5177\u3002", this.characterPowerIcon(player, "character_18")));
       }
     }
-    if (player.characterId === "character_20" && !player.characterState.madeInHeaven && !player.props.some((prop) => prop?.id === "sp_prop3")) {
+    if (this.playerHasCharacterPower(player, "character_20") && !player.characterState.madeInHeaven && !player.props.some((prop) => prop?.id === "sp_prop3")) {
       const slot = firstEmptyPropSlot(player);
       if (slot >= 0) {
         player.props[slot] = makeTemporaryProp("sp_prop3", this.allPropDefinitions.get("sp_prop3"), { exclusive: true });
-        this.send(player, characterTextHint("获得临时专属道具【新月】。", this.characterDefinitions.get(player.characterId)?.image));
+        this.send(player, characterTextHint("获得临时专属道具【新月】。", this.characterPowerIcon(player, "character_20")));
         this.send(player, { type: "prop_slots", body: { props: player.props, uses: player.propUsesThisRound || 0, maxUses: maxPropUsesFor(player) } });
       }
     }
@@ -874,11 +1257,11 @@ export class GameSession {
     const activeDomains = [];
     for (const player of this.players) {
       player.characterState.ryoiki = false;
-      if (player.characterId === "character_14" && this.shouldTriggerSukunaDomain(player)) {
+      if (this.playerHasCharacterPower(player, "character_14") && this.shouldTriggerSukunaDomain(player)) {
         player.characterState.ryoiki = true;
         activeDomains.push({ source: player, type: "sukuna", name: "伏魔御厨子" });
       }
-      if (player.characterId === "character_15" && player.characterState.gojoPurpleTriggered) {
+      if (this.playerHasCharacterPower(player, "character_15") && player.characterState.gojoPurpleTriggered) {
         player.characterState.ryoiki = true;
         activeDomains.push({ source: player, type: "gojo", name: "无量空处" });
       }
@@ -956,10 +1339,10 @@ export class GameSession {
 
   applyRoundEndCharacterProps(roundIndex) {
     for (const player of this.players) {
-      if (player.characterId === "character_17") this.applyCreeperRoundEnd(player, roundIndex);
-      if (player.characterId === "character_16") this.applyLuxunRoundEnd(player, roundIndex);
-      if (player.characterId === "character_19") this.applyRaidCapRoundEnd(player, roundIndex);
-      if (player.characterId === "character_22") this.applyReinerRoundEnd(player, roundIndex);
+      if (this.playerHasCharacterPower(player, "character_17")) this.applyCreeperRoundEnd(player, roundIndex);
+      if (this.playerHasCharacterPower(player, "character_16")) this.applyLuxunRoundEnd(player, roundIndex);
+      if (this.playerHasCharacterPower(player, "character_19")) this.applyRaidCapRoundEnd(player, roundIndex);
+      if (this.playerHasCharacterPower(player, "character_22")) this.applyReinerRoundEnd(player, roundIndex);
     }
   }
 
@@ -994,7 +1377,7 @@ export class GameSession {
 
   applyMegumiRoundEndForAll(roundIndex) {
     for (const player of this.players) {
-      if (player.characterId === "character_21") this.applyMegumiRoundEnd(player, roundIndex);
+      if (this.playerHasCharacterPower(player, "character_21")) this.applyMegumiRoundEnd(player, roundIndex);
     }
   }
 
@@ -1008,7 +1391,7 @@ export class GameSession {
     player.characterState.creeperMatchedRounds.push(roundIndex);
     player.characterState.creeperMatches = (player.characterState.creeperMatches || 0) + 1;
     const progress = player.characterState.creeperMatches % 2 || 2;
-    this.send(player, characterTextHint(`\u76f8\u8fd1\u51fa\u4ef7\u6761\u4ef6\u8fbe\u6210\uff0c\u8fdb\u5ea6 ${progress}/2\u3002`, this.characterDefinitions.get(player.characterId)?.image));
+    this.send(player, characterTextHint(`\u76f8\u8fd1\u51fa\u4ef7\u6761\u4ef6\u8fbe\u6210\uff0c\u8fdb\u5ea6 ${progress}/2\u3002`, this.characterPowerIcon(player, "character_17")));
     const deserved = Math.floor(player.characterState.creeperMatches / 2);
     const granted = player.characterState.creeperGranted || 0;
     for (let i = granted; i < deserved; i += 1) player.pendingExclusiveProps.push("sp_prop1");
@@ -1034,7 +1417,7 @@ export class GameSession {
       player.props[slot] = makeTemporaryProp(id, this.propDefinitions.get(id));
       granted += 1;
     }
-    if (granted > 0) this.send(player, characterTextHint(`\u8fde\u7eed\u51fa\u4ef7\u76f8\u540c\uff0c\u83b7\u5f97 ${granted} \u4ef6\u4e34\u65f6\u9053\u5177\u3002`, this.characterDefinitions.get(player.characterId)?.image));
+    if (granted > 0) this.send(player, characterTextHint(`\u8fde\u7eed\u51fa\u4ef7\u76f8\u540c\uff0c\u83b7\u5f97 ${granted} \u4ef6\u4e34\u65f6\u9053\u5177\u3002`, this.characterPowerIcon(player, "character_16")));
     this.send(player, { type: "prop_slots", body: { props: player.props, uses: player.propUsesThisRound || 0, maxUses: maxPropUsesFor(player) } });
   }
 
@@ -1050,13 +1433,13 @@ export class GameSession {
       state.omenTotalByPlayer[target.id] = (state.omenTotalByPlayer[target.id] || 0) + 1;
       state.omenActive[target.id] = state.omenTotalByPlayer[target.id];
       if (state.omenActive[target.id] >= 2) this.awardAchievement(player, "20");
-      this.send(target, characterTextHint(`受到 RaidCap 的不详之兆影响，下回合竞价出价视为减少 ${state.omenActive[target.id] * 5}%。`, this.characterDefinitions.get(player.characterId)?.image));
+      this.send(target, characterTextHint(`受到 RaidCap 的不详之兆影响，下回合竞价出价视为减少 ${state.omenActive[target.id] * 5}%。`, this.characterPowerIcon(player, "character_19")));
     }
   }
 
   sendRoundStartChoiceRequests(round) {
     for (const player of this.players) {
-      if (player.characterId !== "character_21" || player.disconnected) continue;
+      if (!this.playerHasCharacterPower(player, "character_21") || player.disconnected) continue;
       if (this.actionLockedPlayerIds.has(player.id)) continue;
       if (round === 2 && !player.characterState.megumiMode) {
         this.send(player, {
@@ -1070,7 +1453,7 @@ export class GameSession {
   }
 
   receiveMegumiChoice(player, choice) {
-    if (player.characterId !== "character_21" || this.round < 2 || player.characterState.megumiMode) return;
+    if (!this.playerHasCharacterPower(player, "character_21") || this.round < 2 || player.characterState.megumiMode) return;
     const normalized = choice === "makora" ? "makora" : "domain";
     if (normalized === "domain" && this.players.length < 3) {
       this.send(player, { type: "error", message: "本局玩家少于3人，不能选择领域展开" });
@@ -1103,7 +1486,7 @@ export class GameSession {
   }
 
   receiveMegumiPrediction(player, predictions) {
-    if (player.characterId !== "character_21" || player.characterState.megumiMode !== "makora") return;
+    if (!this.playerHasCharacterPower(player, "character_21") || player.characterState.megumiMode !== "makora") return;
     if (this.roundPaused) return;
     if (this.actionLockedPlayerIds.has(player.id)) return;
     if (player.submitted?.[this.round - 1]) return;
@@ -1114,7 +1497,7 @@ export class GameSession {
       normalized[target.id] = value === "up" || value === "down" ? value : "equal";
     }
     player.characterState.megumiPredictions[this.round] = normalized;
-    this.send(player, characterTextHint("本回合预测已提交。", this.characterDefinitions.get(player.characterId)?.image));
+    this.send(player, characterTextHint("本回合预测已提交。", this.characterPowerIcon(player, "character_21")));
   }
 
   applyMegumiRoundEnd(player, roundIndex) {
@@ -1158,7 +1541,7 @@ export class GameSession {
 
   broadcastCharacterText(player, text) {
     for (const target of this.players) {
-      this.send(target, characterTextHint(text, this.characterDefinitions.get(player.characterId)?.image));
+      this.send(target, characterTextHint(text, this.characterPowerIcon(player, "character_21")));
     }
   }
 
@@ -1169,7 +1552,7 @@ export class GameSession {
 
   deferRoundStartCharacterTextToAll(player, text) {
     for (const target of this.players) {
-      this.deferRoundStartPayload(target, characterTextHint(text, this.characterDefinitions.get(player.characterId)?.image));
+      this.deferRoundStartPayload(target, characterTextHint(text, this.characterPowerIcon(player, "character_21")));
     }
   }
 
@@ -1179,13 +1562,13 @@ export class GameSession {
       if (slot < 0) return;
       const id = player.pendingExclusiveProps.shift();
       player.props[slot] = makeTemporaryProp(id, this.allPropDefinitions.get(id), { exclusive: true });
-      this.send(player, characterTextHint("\u7d2f\u8ba1\u6ee1\u8db3\u6761\u4ef6\uff0c\u83b7\u5f97\u4e34\u65f6\u4e13\u5c5e\u9053\u5177\u3010TNT\u3011\u3002", this.characterDefinitions.get(player.characterId)?.image));
+      this.send(player, characterTextHint("\u7d2f\u8ba1\u6ee1\u8db3\u6761\u4ef6\uff0c\u83b7\u5f97\u4e34\u65f6\u4e13\u5c5e\u9053\u5177\u3010TNT\u3011\u3002", this.characterPowerIcon(player, "character_17")));
     }
     this.send(player, { type: "prop_slots", body: { props: player.props, uses: player.propUsesThisRound || 0, maxUses: maxPropUsesFor(player) } });
   }
 
   useTntProp(player, target) {
-    if (player.characterId === "character_17") {
+    if (this.playerHasCharacterPower(player, "character_17")) {
       player.characterState.tntUses = Number(player.characterState.tntUses || 0) + 1;
       if (player.characterState.tntUses >= 2) this.awardAchievement(player, "16");
     }
@@ -1234,7 +1617,7 @@ export class GameSession {
         if (neighborIndex > 0) neighborIndexes.add(neighborIndex);
       }
       const message = [...neighborIndexes].map((neighborIndex) => this.warehouse.addHint(player.gameIndex, { type: "item_outline", itemIndex: neighborIndex }));
-      if (player.characterId === "character_20" && !player.characterState.madeInHeaven) this.markPucciMoonFailed(player);
+      if (this.playerHasCharacterPower(player, "character_20") && !player.characterState.madeInHeaven) this.markPucciMoonFailed(player);
       const text = message.length > 0
         ? "选定位置没有战利品，已尝试显示相邻战利品轮廓。"
         : "【新月】选择的位置没有物品，且相邻格也没有可显示的战利品。";
@@ -1247,7 +1630,7 @@ export class GameSession {
     const message = rawHints.map((hint) => this.warehouse.addHint(player.gameIndex, hint));
 
     let text = `显示了【${selectedItem.name}】以及相邻战利品的轮廓。`;
-    if (player.characterId === "character_20" && !player.characterState.madeInHeaven) {
+    if (this.playerHasCharacterPower(player, "character_20") && !player.characterState.madeInHeaven) {
       if (Number(player.characterState.pucciTargetIndex) === Number(itemIndex)) {
         this.activateMadeInHeaven(player);
         text += " 目标定位成功，【天堂制造】开始。";
@@ -1261,13 +1644,13 @@ export class GameSession {
   }
 
   markPucciMoonFailed(player) {
-    if (player.characterId !== "character_20" || this.round !== 5 || player.characterState.madeInHeaven) return;
+    if (!this.playerHasCharacterPower(player, "character_20") || this.round !== 5 || player.characterState.madeInHeaven) return;
     player.characterState.pucciMoonFailedRoundFive = true;
     if (!player.characterState.secretWordSubmitted) this.sendSecretWordChallenge(player);
   }
 
   sendSecretWordChallenge(player) {
-    if (player.characterId !== "character_20" || this.round !== 5 || player.submitted[this.round - 1]) return;
+    if (!this.playerHasCharacterPower(player, "character_20") || this.round !== 5 || player.submitted[this.round - 1]) return;
     const values = shuffleValues(Array.from({ length: SECRET_WORD_TAGS.length }, (_, index) => index), this.random);
     const mapping = Object.fromEntries(SECRET_WORD_TAGS.map((tag, index) => [tag, values[index]]));
     const correctValues = SECRET_WORD_SEQUENCE.map((tag) => mapping[tag]);
@@ -1283,7 +1666,7 @@ export class GameSession {
     const roundIndex = this.round - 1;
     if (
       this.round !== 5
-      || player.characterId !== "character_20"
+      || !this.playerHasCharacterPower(player, "character_20")
       || player.characterState.madeInHeaven
       || !player.characterState.pucciMoonFailedRoundFive
       || !player.characterState.secretWordAvailable
@@ -1293,7 +1676,7 @@ export class GameSession {
       || this.roundPaused
       || this.finished
     ) {
-      this.send(player, characterTextHint("\u5bc6\u8bed\u63d0\u4ea4\u65e0\u6548\u3002", this.characterDefinitions.get(player.characterId)?.image));
+      this.send(player, characterTextHint("\u5bc6\u8bed\u63d0\u4ea4\u65e0\u6548\u3002", this.characterPowerIcon(player, "character_20")));
       return;
     }
     player.characterState.secretWordSubmitted = true;
@@ -1301,12 +1684,12 @@ export class GameSession {
     const expected = player.characterState.secretWordChallenge?.hash || "";
     const ok = typeof hash === "string" && hash === expected;
     if (!ok) {
-      this.send(player, characterTextHint("\u5bc6\u8bed\u9519\u8bef\uff0c\u672a\u80fd\u8fdb\u5165\u3010\u5929\u5802\u5236\u9020\u3011\u3002", this.characterDefinitions.get(player.characterId)?.image));
+      this.send(player, characterTextHint("\u5bc6\u8bed\u9519\u8bef\uff0c\u672a\u80fd\u8fdb\u5165\u3010\u5929\u5802\u5236\u9020\u3011\u3002", this.characterPowerIcon(player, "character_20")));
       this.send(player, { type: "secret_word_state", body: { available: false } });
       return;
     }
     this.activateMadeInHeaven(player, { multiplier: 1.2 });
-    this.send(player, characterTextHint("\u5bc6\u8bed\u6b63\u786e\uff0c\u3010\u5929\u5802\u5236\u9020\u3011\u5f00\u59cb\u3002", this.characterDefinitions.get(player.characterId)?.image));
+    this.send(player, characterTextHint("\u5bc6\u8bed\u6b63\u786e\uff0c\u3010\u5929\u5802\u5236\u9020\u3011\u5f00\u59cb\u3002", this.characterPowerIcon(player, "character_20")));
     this.send(player, { type: "secret_word_state", body: { available: false } });
   }
 
@@ -1554,7 +1937,7 @@ export class GameSession {
   }
 
   createChairReplacement(winner, publicWarehouseItems) {
-    if (winner.characterId !== "character_22" || !winner.characterState.reinerTransformed) return null;
+    if (!this.playerHasCharacterPower(winner, "character_22") || !winner.characterState.reinerTransformed) return null;
     const chairCount = Math.max(0, Math.floor(Number(winner.characterState.reinerChairCount || 0)));
     if (!chairCount) return null;
     const chairItem = this.itemsById.get(this.chairItemId);
@@ -1632,25 +2015,28 @@ export class GameSession {
         countdownSeconds: this.currentCountdownSeconds(),
         roundInitialSeconds: this.started ? this.clientCountdownSecondsFor(this.currentRoundDurationMs || ROUND_MS) : 0,
         actionLocked: this.actionLockedPlayerIds.has(player.id),
+        propUseLocked: Boolean(player.characterState.otosakaPropUseLockedUntil && player.characterState.otosakaPropUseLockedUntil > Date.now()),
         madeInHeavenActive: this.players.some((entry) => entry.characterState.madeInHeaven),
         secretWord: secretWordPublicState(player),
+        otosaka: this.otosakaPublicState(player),
         hints: this.warehouse.getView(player.gameIndex).hint,
         notices: player.messageLog || [],
         reconnect: this.started,
       },
     });
-    if (player.characterId === "character_21" && player.characterState.megumiMode === "makora" && this.round >= 2) {
+    if (this.playerHasCharacterPower(player, "character_21") && player.characterState.megumiMode === "makora" && this.round >= 2) {
       this.sendMegumiPredictionAvailable(player);
     }
   }
 
   emitCharacterStartHint(player) {
+    if (player.characterState.stolenByOtosakaId) return;
     try {
       if (player.characterId === "character_7") {
         const highRarityCount = realItemEntries(this.warehouse).filter(({ item }) => ["purple", "gold", "red"].includes(item.rarity)).length;
         if (highRarityCount === 0) this.awardAchievement(player, "17");
       }
-      if (player.characterId === "character_15") {
+      if (this.playerHasCharacterPower(player, "character_15")) {
         this.emitGojoStartHint(player);
         return;
       }
@@ -1673,12 +2059,18 @@ export class GameSession {
   }
 
   emitCharacterRoundHint(player) {
+    if (player.characterState.stolenByOtosakaId) return;
     try {
-      if (player.characterId === "character_20") {
+      const stolenIds = player.characterState.otosakaStolenCharacterIds || [];
+      if (stolenIds.length) {
+        for (const stolenId of stolenIds) this.emitCharacterRoundHintById(player, stolenId);
+        if (player.characterId === "character_23") return;
+      }
+      if (this.playerHasCharacterPower(player, "character_20")) {
         this.emitPucciTargetHint(player);
         return;
       }
-      if (player.characterId === "character_15") {
+      if (this.playerHasCharacterPower(player, "character_15")) {
         this.emitGojoRoundHint(player);
         return;
       }
@@ -1700,7 +2092,24 @@ export class GameSession {
     }
   }
 
-  emitPucciTargetHint(player) {
+  emitCharacterRoundHintById(player, characterId) {
+    if (characterId === "character_20") return this.emitPucciTargetHint(player, characterId);
+    if (characterId === "character_15") return this.emitGojoRoundHint(player, characterId);
+    const character = createCharacter(characterId, this.characterDefinitions.get(characterId));
+    const hints = character.onRoundStart({
+      warehouse: this.warehouse,
+      viewNumber: player.gameIndex,
+      view: this.warehouse.getView(player.gameIndex),
+      random: this.random,
+      round: this.round,
+      player,
+      players: this.players,
+      state: player.characterState,
+    });
+    this.sendCharacterHints(player, hints, { iconCharacterId: characterId });
+  }
+
+  emitPucciTargetHint(player, iconCharacterId = null) {
     if (player.characterState.madeInHeaven) return;
     const target = this.warehouse.getItemByIndex(player.characterState.pucciTargetIndex);
     if (!target) return;
@@ -1711,7 +2120,7 @@ export class GameSession {
     else if (round === 3) text = `目标战利品品质为${RARITY_LABELS[target.rarity] || target.rarity}色`;
     else if (round === 4) text = `目标战利品名称为【${target.name}】`;
     else return;
-    this.send(player, characterTextHint(text, this.characterDefinitions.get(player.characterId)?.image));
+    this.send(player, characterTextHint(text, this.characterDefinitions.get(iconCharacterId || player.characterId)?.image));
   }
 
   emitGojoStartHint(player) {
@@ -1727,13 +2136,13 @@ export class GameSession {
       type: "hint",
       title: "\u89d2\u8272\u6280\u80fd",
       text: "开局显示一件蓝色品质战利品，并进入【苍】阶段。",
-      icon: this.characterDefinitions.get(player.characterId)?.image || "",
+      icon: this.characterPowerIcon(player, "character_15"),
       show: message.length > 0,
       message,
     });
   }
 
-  emitGojoRoundHint(player) {
+  emitGojoRoundHint(player, iconCharacterId = null) {
     if (!player.characterState.gojoMode) player.characterState.gojoMode = "blue";
     const previousRoundIndex = this.round - 2;
     if (previousRoundIndex < 0) return;
@@ -1757,7 +2166,7 @@ export class GameSession {
         type: "hint",
         title: "\u89d2\u8272\u6280\u80fd",
         text: "【苍】效果触发，显示所有与完全已知战利品相邻的战利品，并进入【赫】阶段。",
-        icon: this.characterDefinitions.get(player.characterId)?.image || "",
+        icon: this.characterDefinitions.get(iconCharacterId || player.characterId)?.image || "",
         show: message.length > 0,
         message,
       });
@@ -1772,7 +2181,7 @@ export class GameSession {
         type: "hint",
         title: "\u89d2\u8272\u6280\u80fd",
         text: "【赫】效果触发，随机显示一件高品质战利品，并进入【茈】阶段。",
-        icon: this.characterDefinitions.get(player.characterId)?.image || "",
+        icon: this.characterDefinitions.get(iconCharacterId || player.characterId)?.image || "",
         show: message.length > 0,
         message,
       });
@@ -1794,7 +2203,7 @@ export class GameSession {
         type: "hint",
         title: "\u89d2\u8272\u6280\u80fd",
         text: "【茈】效果触发，显示所有紫色品质战利品以及与它们相邻的战利品。",
-        icon: this.characterDefinitions.get(player.characterId)?.image || "",
+        icon: this.characterDefinitions.get(iconCharacterId || player.characterId)?.image || "",
         show: message.length > 0,
         message,
       });
@@ -1811,9 +2220,9 @@ export class GameSession {
     return null;
   }
 
-  sendCharacterHints(player, hints) {
+  sendCharacterHints(player, hints, { iconCharacterId = null } = {}) {
     for (const hint of [hints].flat().filter(Boolean)) {
-      hint.icon = this.characterDefinitions.get(player.characterId)?.image || "";
+      hint.icon = this.characterDefinitions.get(iconCharacterId || player.characterId)?.image || "";
       this.send(player, hint);
     }
   }
@@ -1854,15 +2263,16 @@ export class GameSession {
   bidMultiplierFor(player, roundIndex) {
     let multiplier = 1;
     if (player.characterState.madeInHeaven) multiplier *= Number(player.characterState.madeInHeavenMultiplier || 1.3);
-    if (player.characterState.reinerTransformed) multiplier *= reinerMultiplierForRound(roundIndex + 1);
+    if (player.characterState.otosakaPenaltyMultiplier) multiplier *= Number(player.characterState.otosakaPenaltyMultiplier || 1);
+    if (this.playerHasCharacterPower(player, "character_22") && player.characterState.reinerTransformed) multiplier *= reinerMultiplierForRound(roundIndex + 1);
     if (player.characterState.domainBidMultiplier?.[roundIndex]) multiplier *= Number(player.characterState.domainBidMultiplier[roundIndex]) || 1;
-    if (player.characterId === "character_19") {
+    if (this.playerHasCharacterPower(player, "character_19")) {
       for (const raidCap of this.players) {
         const omen = Number(raidCap.characterState?.omenActive?.[player.id] || 0);
         if (omen > 0) multiplier *= Math.max(0, 1 - omen * 0.05);
       }
     }
-    if (player.characterId === "character_21" && player.characterState.megumiMode === "domain" && roundIndex >= 1) {
+    if (this.playerHasCharacterPower(player, "character_21") && player.characterState.megumiMode === "domain" && roundIndex >= 1) {
       const others = this.players.filter((entry) => entry.id !== player.id).map((entry) => entry.bids[roundIndex - 1] || 0);
       if (others.length) {
         const low = Math.min(...others);
@@ -1873,7 +2283,7 @@ export class GameSession {
     }
     if (roundIndex === 3) {
       for (const sukuna of this.players) {
-        if (sukuna.characterId !== "character_14" || sukuna.id === player.id) continue;
+        if (!this.playerHasCharacterPower(sukuna, "character_14") || sukuna.id === player.id) continue;
         if (![0, 1, 2].every((index) => (sukuna.bids[index] || 0) === 0)) continue;
         const otherBids = this.players.filter((entry) => entry.id !== sukuna.id).map((entry) => entry.bids[roundIndex] || 0);
         const highest = Math.max(...otherBids);
@@ -1977,6 +2387,60 @@ function normalizeTarget(target) {
   };
 }
 
+function normalizeRect(rect) {
+  const x1 = Math.max(0, Math.min(Warehouse.WIDTH - 1, Math.floor(Number(rect?.x1 ?? rect?.x ?? 0))));
+  const y1 = Math.max(0, Math.min(Warehouse.MAX_ROWS - 1, Math.floor(Number(rect?.y1 ?? rect?.y ?? 0))));
+  const x2 = Math.max(0, Math.min(Warehouse.WIDTH - 1, Math.floor(Number(rect?.x2 ?? rect?.x ?? 0))));
+  const y2 = Math.max(0, Math.min(Warehouse.MAX_ROWS - 1, Math.floor(Number(rect?.y2 ?? rect?.y ?? 0))));
+  return { x1: Math.min(x1, x2), y1: Math.min(y1, y2), x2: Math.max(x1, x2), y2: Math.max(y1, y2) };
+}
+
+function rectContains(rect, x, y) {
+  return x >= rect.x1 && x <= rect.x2 && y >= rect.y1 && y <= rect.y2;
+}
+
+function cellsInRect(rect) {
+  const cells = [];
+  for (let y = rect.y1; y <= rect.y2; y += 1) {
+    for (let x = rect.x1; x <= rect.x2; x += 1) cells.push({ x, y });
+  }
+  return cells;
+}
+
+function itemIndexesInRect(warehouse, rect) {
+  const indexes = new Set();
+  for (const cell of cellsInRect(rect)) {
+    const index = warehouse.getIndexAt(cell.x, cell.y);
+    if (index > 0) indexes.add(index);
+  }
+  return [...indexes];
+}
+
+function serializableHintItem(item, itemIndex = item.index) {
+  return {
+    itemIndex,
+    id: item.id,
+    x: item.x,
+    y: item.y,
+    width: item.width,
+    height: item.height,
+    rarity: item.rarity,
+    price: item.price,
+    name: item.name,
+    itemType: item.type,
+    typeLabel: item.typeLabel,
+  };
+}
+
+function firstKnownRarityCell(view, item) {
+  for (let y = item.y; y < item.y + item.height; y += 1) {
+    for (let x = item.x; x < item.x + item.width; x += 1) {
+      if (view.rarityKnown[y][x]) return { x, y };
+    }
+  }
+  return null;
+}
+
 function isSpecialProp(id) {
   return String(id || "").startsWith("sp_prop");
 }
@@ -2013,7 +2477,7 @@ function firstEmptyPropSlot(player) {
 }
 
 function maxPropUsesFor(player) {
-  return player.characterId === "character_16" ? 2 : 1;
+  return ((player.characterId === "character_16" && !player.characterState.stolenByOtosakaId) || (player.characterState.otosakaStolenCharacterIds || []).includes("character_16")) ? 2 : 1;
 }
 
 function cellHasDirectKnownInfo(view, x, y) {
@@ -2034,6 +2498,7 @@ function publicPlayer(player) {
   let characterImageOverride = "";
   if (player.characterId === "character_21" && player.characterState.megumiMode === "makora") characterImageOverride = "/resource/characters/Makora.png";
   if (player.characterId === "character_22" && player.characterState.reinerTransformed) characterImageOverride = "/resource/characters/ArmoredTitan.png";
+  if (player.characterState.stolenByOtosakaId) characterImageOverride = "/resource/characters/Noob.png";
   return {
     id: player.id,
     nickname: player.nickname,
@@ -2041,6 +2506,8 @@ function publicPlayer(player) {
     characterId: player.characterId,
     characterName: player.characterId,
     characterImageOverride,
+    stolenCharacterIds: player.characterState.otosakaStolenCharacterIds || [],
+    megumiMode: player.characterState.megumiMode || "",
     reinerTransformed: Boolean(player.characterState.reinerTransformed),
     money: player.profile.money,
     disconnected: player.disconnected,
@@ -2197,6 +2664,12 @@ function reinerMultiplierForRound(round) {
 
 function formatMultiplier(value) {
   return Number(value || 0).toFixed(1).replace(/\.0$/, "");
+}
+
+function skillAnimationsForKind(kind) {
+  if (kind === "otosaka_plunder_success") return [{ id: 11, durationSeconds: ANIMATION_SECONDS[11] }];
+  if (kind === "otosaka_peep_blocked") return [{ id: 12, durationSeconds: ANIMATION_SECONDS[12], noAudio: true }];
+  return [];
 }
 
 function hashSecretWordValues(values) {

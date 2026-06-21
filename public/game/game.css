@@ -284,7 +284,7 @@ a {
   padding: 10px;
 }
 
-.action-panel:not(:has(#predictButton:not([hidden]))):not(:has(#transformButton:not([hidden]))):not(:has(#secretWordButton:not([hidden]))) {
+.action-panel:not(:has(#activeSkillSlot:not([hidden]))) {
   width: 336px;
   grid-template-columns: 76px 1fr;
 }
@@ -316,31 +316,33 @@ a {
   font-size: 13px;
 }
 
-#predictButton,
-#transformButton,
-#secretWordButton {
+.active-skill-slot {
   grid-column: 3;
   grid-row: 2;
-  width: 56px;
-  height: 56px;
   align-self: center;
   justify-self: center;
+  display: grid;
+  gap: 4px;
+  justify-items: center;
+}
+
+#activeSkillButton {
+  width: 56px;
+  height: 56px;
   border: 1px solid var(--line);
   background: rgba(255, 255, 255, 0.08);
   padding: 4px;
   position: relative;
 }
 
-#predictButton img,
-#transformButton img,
-#secretWordButton img {
+#activeSkillButton img {
   width: 48px;
   height: 48px;
   object-fit: contain;
   display: block;
 }
 
-#transformCountdown {
+#activeSkillCountdown {
   position: absolute;
   left: 50%;
   top: -24px;
@@ -353,6 +355,27 @@ a {
   text-shadow: 0 0 8px rgba(255, 157, 46, 0.72);
 }
 
+.active-skill-pager {
+  display: grid;
+  grid-template-columns: 18px auto 18px;
+  align-items: center;
+  gap: 3px;
+  color: #d8d8d8;
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.active-skill-pager button {
+  width: 18px;
+  height: 16px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: #d8d8d8;
+  font-size: 12px;
+  line-height: 1;
+}
+
 #bidButton {
   grid-column: 2;
   grid-row: 2;
@@ -360,9 +383,7 @@ a {
 }
 
 #bidButton:disabled,
-#predictButton:disabled,
-#transformButton:disabled,
-#secretWordButton:disabled {
+#activeSkillButton:disabled {
   opacity: 0.45;
   cursor: not-allowed;
 }
@@ -379,6 +400,17 @@ a {
   min-height: 0;
   display: flex;
   flex-direction: column;
+}
+
+.warehouse-foot {
+  height: 28px;
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  color: #b8ff3f;
+  font-size: 17px;
+  font-weight: 900;
+  text-shadow: 0 0 10px rgba(184, 255, 63, 0.36);
 }
 
 .settlement-panel {
@@ -843,6 +875,30 @@ dialog {
 .prediction-card [data-pick].selected {
   background: #76d9ff;
   color: #051014;
+}
+
+.otosaka-target-list {
+  display: grid;
+  gap: 8px;
+}
+
+.otosaka-target-list label {
+  min-height: 40px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  background: rgba(0, 0, 0, 0.24);
+}
+
+.proxy-prop-card {
+  width: min(720px, calc(100vw - 48px));
+}
+
+.proxy-prop-choices {
+  max-height: 360px;
+  overflow: auto;
 }
 
 .secret-word-card {
