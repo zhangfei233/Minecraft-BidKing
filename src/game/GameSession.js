@@ -40,8 +40,8 @@ const ANIMATION_SECONDS = {
   11: 7.25,
   12: 2,
 };
-const HEARTBEAT_TIMEOUT_MS = 45_000;
-const GAME_RECONNECT_GRACE_MS = 60_000;
+const HEARTBEAT_TIMEOUT_MS = 25_000;
+const GAME_RECONNECT_GRACE_MS = 20_000;
 const RARITIES = ["gray", "green", "blue", "purple", "gold", "red"];
 const RARITY_LABELS = { gray: "\u767d", green: "\u7eff", blue: "\u84dd", purple: "\u7d2b", gold: "\u91d1", red: "\u7ea2" };
 const SYSTEM_HINT_TITLE = "\u516c\u5f00\u7684\u6218\u5229\u54c1\u4fe1\u606f";
@@ -108,6 +108,7 @@ export class GameSession {
       characterState: {},
       pendingMessages: [],
       messageLog: [],
+      processedClientMessages: new Map(),
       effectIcons: [],
       pendingExclusiveProps: [],
       copiedItems: [],
@@ -170,10 +171,7 @@ export class GameSession {
     if (previousSocket && previousSocket !== socket) previousSocket.destroy();
 
     this.sendInit(player);
-    for (const payload of player.pendingMessages.splice(0)) {
-      if (payload?.type === "hint" || payload?.type === "notice") continue;
-      this.send(player, payload);
-    }
+    for (const payload of player.pendingMessages.splice(0)) this.send(player, payload);
     if (this.started && !this.finished) this.broadcastPublicState({ clearBidState: false });
     if (!this.started && this.players.every((entry) => entry.connected || entry.disconnected)) this.start();
   }
@@ -233,7 +231,11 @@ export class GameSession {
     if (this.finished) return;
     const now = Date.now();
     for (const player of this.players) {
-      if (player.connected && now - player.lastSeen > HEARTBEAT_TIMEOUT_MS) this.scheduleDisconnect(player, player.gameSocket);
+      if (player.connected && now - player.lastSeen > HEARTBEAT_TIMEOUT_MS) {
+        const socket = player.gameSocket;
+        socket?.destroy?.();
+        this.scheduleDisconnect(player, socket);
+      }
     }
   }
 
@@ -703,7 +705,24 @@ export class GameSession {
       this.send(player, { type: "error", message: "角色技能执行失败" });
       return;
     }
-    if (message.type === "heartbeat") return;
+    if (message.type === "heartbeat") {
+      this.send(player, { type: "heartbeat_ack", body: { t: Date.now(), clientTime: message.clientTime || null } });
+      return;
+    }
+
+    const clientMessageId = typeof message.clientMessageId === "string" ? message.clientMessageId.slice(0, 80) : "";
+    if (clientMessageId) {
+      if (player.processedClientMessages.has(clientMessageId)) {
+        this.send(player, { type: "operation_ack", body: { id: clientMessageId, duplicate: true } });
+        return;
+      }
+      player.processedClientMessages.set(clientMessageId, Date.now());
+      if (player.processedClientMessages.size > 200) {
+        const entries = [...player.processedClientMessages.entries()].sort((a, b) => a[1] - b[1]);
+        for (const [id] of entries.slice(0, player.processedClientMessages.size - 160)) player.processedClientMessages.delete(id);
+      }
+      this.send(player, { type: "operation_ack", body: { id: clientMessageId, type: message.type } });
+    }
 
     if (message.type === "settlement_sell") {
       this.sellSettlementItems(player, message.mode, message);
@@ -1019,7 +1038,7 @@ export class GameSession {
   }
 
   playerCanOtosakaDefend(player) {
-    if (!player || player.characterState.stolenByOtosakaId) return false;
+    if (!player) return false;
     return this.players.some((entry) => entry.id !== player.id && this.playerHasOtosakaPeep(entry));
   }
 
@@ -1134,19 +1153,23 @@ export class GameSession {
     const state = source.characterState.otosakaPossession?.[target.id];
     if (!state || state.stolen || state.count < 2) return;
     const occupiedCells = this.warehouse.items.slice(1).reduce((sum, item) => sum + itemCells(item), 0);
-    if (state.cells.length <= occupiedCells / 2) return;
+    if (state.cells.length < Math.ceil(occupiedCells / 3)) return;
     state.stolen = true;
-    const result = this.transferCharacterPower(source, target);
     this.emitSkillAnimationWindow("otosaka_plunder_success", { source, target });
+    const delayMs = Math.ceil((ANIMATION_SECONDS[12] || 0) * 1000);
+    setTimeout(() => this.completeOtosakaPlunder(source.id, target.id), delayMs).unref?.();
+  }
+
+  completeOtosakaPlunder(sourceId, targetId) {
+    const source = this.playersById.get(String(sourceId));
+    const target = this.playersById.get(String(targetId));
+    if (!source || !target || this.finished) return;
+    const result = this.transferCharacterPower(source, target);
+    const publicText = result.targetWasAlreadyRobbed
+      ? `Otosaka玩家${source.nickname}窥视了已被掠夺的${target.nickname}，仅同步其战利品信息。`
+      : `Otosaka玩家${source.nickname}掠夺成功，${target.nickname}失去了角色能力。`;
+    this.broadcast(characterTextHint(publicText, this.characterPowerIcon(source, "character_23")));
     this.broadcastPublicState({ clearBidState: false });
-    const sourceText = result.skillTransferred
-      ? `成功掠夺${target.nickname}的能力。`
-      : `成功掠夺${target.nickname}，但目标没有可转移的技能，仅同步其视野信息。`;
-    const targetText = result.targetWasAlreadyRobbed
-      ? `Otosaka玩家${source.nickname}窥视了你的视野。`
-      : `Otosaka玩家${source.nickname}掠夺了你的能力。`;
-    this.send(source, characterTextHint(sourceText, this.characterDefinitions.get(source.characterId)?.image));
-    this.send(target, characterTextHint(targetText, this.characterDefinitions.get(source.characterId)?.image));
     this.broadcastOtosakaStates();
   }
 
@@ -1207,7 +1230,7 @@ export class GameSession {
       type: "hint",
       title: "角色技能",
       text: `掠夺成功，同步了${target.nickname}当前掌握的战利品信息。`,
-      icon: this.characterDefinitions.get(source.characterId)?.image || "",
+      icon: this.characterPowerIcon(source, "character_23"),
       show: syncMessage.length > 0,
       message: syncMessage,
     });
@@ -1222,7 +1245,10 @@ export class GameSession {
       });
       for (const icon of movedIcons) this.addEffectIcon(source, icon, { replaceKey: false });
     }
-    return { skillTransferred: Boolean(transferableCharacterId), targetWasAlreadyRobbed };
+    return {
+      skillTransferred: Boolean(transferableCharacterId),
+      targetWasAlreadyRobbed: targetAlreadyRobbed,
+    };
   }
 
   broadcastOtosakaStates() {
@@ -1230,6 +1256,14 @@ export class GameSession {
   }
 
   applyRoundStartCharacterProps(player, round) {
+    if (this.playerHasCharacterPower(player, "character_16") && round === 2 && !player.characterState.luxunRoundTwoPropGranted) {
+      player.characterState.luxunRoundTwoPropGranted = true;
+      const granted = this.grantRandomTemporaryProp(player);
+      if (granted) {
+        this.send(player, characterTextHint(`第二回合开始，随机获得临时道具【${this.allPropDefinitions.get(granted)?.name || granted}】。`, this.characterPowerIcon(player, "character_16")));
+        this.send(player, { type: "prop_slots", body: { props: player.props, uses: player.propUsesThisRound || 0, maxUses: maxPropUsesFor(player) } });
+      }
+    }
     if (this.playerHasCharacterPower(player, "character_17")) this.tryGrantPendingExclusive(player);
     if (this.playerHasCharacterPower(player, "character_18") && round % 2 === 1 && !player.props.some((prop) => prop?.id === "sp_prop2")) {
       const candidates = player.props.map((prop, slot) => ({ prop, slot })).filter(({ prop }) => prop && !prop.exclusive);
@@ -1384,7 +1418,7 @@ export class GameSession {
   applyCreeperRoundEnd(player, roundIndex) {
     const ownBid = player.bids[roundIndex] || 0;
     if (ownBid <= 0) return;
-    const matched = this.players.some((entry) => entry.id !== player.id && (entry.bids[roundIndex] || 0) >= ownBid * 0.9 && (entry.bids[roundIndex] || 0) <= ownBid * 1.1);
+    const matched = this.players.some((entry) => entry.id !== player.id && (entry.bids[roundIndex] || 0) >= ownBid * 0.85 && (entry.bids[roundIndex] || 0) <= ownBid * 1.15);
     if (!matched) return;
     if (!player.characterState.creeperMatchedRounds) player.characterState.creeperMatchedRounds = [];
     if (player.characterState.creeperMatchedRounds.includes(roundIndex)) return;
@@ -1522,20 +1556,23 @@ export class GameSession {
       const stat = player.characterState.megumiPredictionStats[target.id] || { total: 0, correct: 0 };
       stat.total += 1;
       if (predicted === actual) stat.correct += 1;
+      else stat.streak = 0;
       player.characterState.megumiPredictionStats[target.id] = stat;
       if (predicted !== actual) continue;
       player.characterState.megumiTotalCorrect += 1;
-      const advantage = this.advantages.add(player.id, target.id, 0.05);
+      stat.streak = Number(stat.streak || 0) + 1;
+      const gainedAdvantage = 0.05 * stat.streak;
+      const advantage = this.advantages.add(player.id, target.id, gainedAdvantage);
       this.addEffectIcon(target, {
         key: `makora-adapt:${player.id}`,
         icon: EFFECT_ICONS.makoraAdapt,
         text: `\u88ab\u9002\u5e94\u4e86\uff1a${player.nickname}\u5bf9\u4f60\u5177\u6709${Math.round(advantage * 100)}%\u7684\u4f18\u52bf`,
       });
       correctTargets.push(target);
-      this.send(target, characterTextHint(`Makora玩家${player.nickname}对你进一步适应了。`, "/resource/characters/Makora.png"));
+      this.send(target, characterTextHint(`Makora玩家${player.nickname}对你进一步适应了，本次增加${Math.round(gainedAdvantage * 100)}%优势。`, "/resource/characters/Makora.png"));
     }
     if (correctTargets.length) {
-      this.send(player, characterTextHint(`对${correctTargets.map((target) => target.nickname).join("，")}玩家积累了5%的优势。`, "/resource/characters/Makora.png"));
+      this.send(player, characterTextHint(`对${correctTargets.map((target) => target.nickname).join("，")}玩家进一步积累了优势。`, "/resource/characters/Makora.png"));
     }
   }
 
@@ -2024,7 +2061,12 @@ export class GameSession {
         reconnect: this.started,
       },
     });
-    if (this.playerHasCharacterPower(player, "character_21") && player.characterState.megumiMode === "makora" && this.round >= 2) {
+    if (this.playerHasCharacterPower(player, "character_21") && this.round === 2 && !player.characterState.megumiMode && !player.submitted[this.round - 1] && !this.actionLockedPlayerIds.has(player.id)) {
+      this.send(player, {
+        type: "megumi_choice_request",
+        body: { round: this.round, text: "请选择本局技能路线。", canChooseDomain: this.players.length >= 3 },
+      });
+    } else if (this.playerHasCharacterPower(player, "character_21") && player.characterState.megumiMode === "makora" && this.round >= 2) {
       this.sendMegumiPredictionAvailable(player);
     }
   }
@@ -2090,6 +2132,15 @@ export class GameSession {
       logError("character round skill failed", err, { playerId: player.id, characterId: player.characterId, round: this.round });
       this.send(player, { type: "error", message: "角色技能执行失败" });
     }
+  }
+
+  grantRandomTemporaryProp(player) {
+    const slot = firstEmptyPropSlot(player);
+    const pool = [...this.propDefinitions.keys()];
+    if (slot < 0 || !pool.length) return null;
+    const id = pool[Math.floor(this.random() * pool.length)];
+    player.props[slot] = makeTemporaryProp(id, this.propDefinitions.get(id));
+    return id;
   }
 
   emitCharacterRoundHintById(player, characterId) {
@@ -2343,11 +2394,12 @@ export class GameSession {
   }
 
   send(player, payload) {
-    if (!payload || player.disconnected) return;
+    if (!payload) return;
     if (payload.type === "hint" || payload.type === "notice") {
       player.messageLog.push(payload);
       if (player.messageLog.length > 120) player.messageLog.splice(0, player.messageLog.length - 120);
     }
+    if (player.disconnected) return;
     if (player.gameSocket) sendWsJson(player.gameSocket, payload);
     else player.pendingMessages.push(payload);
   }
@@ -2667,8 +2719,8 @@ function formatMultiplier(value) {
 }
 
 function skillAnimationsForKind(kind) {
-  if (kind === "otosaka_plunder_success") return [{ id: 11, durationSeconds: ANIMATION_SECONDS[11] }];
-  if (kind === "otosaka_peep_blocked") return [{ id: 12, durationSeconds: ANIMATION_SECONDS[12], noAudio: true }];
+  if (kind === "otosaka_peep_blocked") return [{ id: 11, durationSeconds: ANIMATION_SECONDS[11] }];
+  if (kind === "otosaka_plunder_success") return [{ id: 12, durationSeconds: ANIMATION_SECONDS[12], noAudio: true }];
   return [];
 }
 

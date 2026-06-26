@@ -28,6 +28,13 @@ let currentPlayers = [];
 let currentRound = 1;
 let countdownTimer = null;
 let heartbeatTimer = null;
+let connectionWatchTimer = null;
+let reconnectTimer = null;
+let reconnectAttempts = 0;
+let lastServerMessageAt = Date.now();
+let lastHeartbeatAckAt = Date.now();
+let clientMessageSeq = 0;
+const pendingClientMessages = new Map();
 let remainingSeconds = 0;
 let bidInput = "";
 let propDefinitions = {};
@@ -73,6 +80,10 @@ const levelRarities = ["gray", "green", "blue", "purple", "gold", "red"];
 const rarityLabels = { gray: "\u767d", green: "\u7eff", blue: "\u84dd", purple: "\u7d2b", gold: "\u91d1", red: "\u7ea2" };
 const rarityColors = { red: "#ff6060", gold: "#faff75", purple: "#964aca", blue: "#7b8afc", green: "#95de93", gray: "#c7c7c7" };
 const selectedSettlementRarities = new Set();
+const HEARTBEAT_INTERVAL_MS = 5000;
+const HEARTBEAT_ACK_TIMEOUT_MS = 15000;
+const SERVER_SILENCE_TIMEOUT_MS = 22000;
+const RELIABLE_RESEND_MS = 2500;
 const audioCache = new Map();
 const animationDurations = { 1: 13.92, 2: 9.2, 3: 12, 4: 3.5, 5: 2, 6: 8.75, 7: 5.25, 8: 10.25, 9: 10, 10: 5, 11: 7.25, 12: 2 };
 const animationImageCache = new Map();
@@ -112,13 +123,13 @@ activeSkillPager?.addEventListener("click", (event) => {
   if (activeSkillIndex >= activeSkills.length) activeSkillIndex = 0;
   updateActionButtons();
 });
-document.querySelector("#sellAllLootButton").addEventListener("click", () => socket?.send(JSON.stringify({ type: "settlement_sell", mode: "all" })));
-document.querySelector("#sellUnfavoriteLootButton").addEventListener("click", () => socket?.send(JSON.stringify({ type: "settlement_sell", mode: "unfavorite" })));
+document.querySelector("#sellAllLootButton").addEventListener("click", () => sendGameMessage("settlement_sell", { mode: "all" }));
+document.querySelector("#sellUnfavoriteLootButton").addEventListener("click", () => sendGameMessage("settlement_sell", { mode: "unfavorite" }));
 document.querySelector("#sellRarityLootButton").addEventListener("click", () => {
   if (!selectedSettlementRarities.size) return alert("\u8bf7\u81f3\u5c11\u9009\u62e9\u4e00\u79cd\u54c1\u8d28");
-  socket?.send(JSON.stringify({ type: "settlement_sell", mode: "rarity", rarities: [...selectedSettlementRarities] }));
+  sendGameMessage("settlement_sell", { mode: "rarity", rarities: [...selectedSettlementRarities] });
 });
-document.querySelector("#returnRoomButton").addEventListener("click", () => socket?.send(JSON.stringify({ type: "return_room" })));
+document.querySelector("#returnRoomButton").addEventListener("click", () => sendGameMessage("return_room"));
 
 canvas.addEventListener("click", (event) => {
   const cell = renderer.cellFromEvent(event);
@@ -161,21 +172,121 @@ canvas.addEventListener("mouseleave", () => {
 });
 
 function connectGameSocket() {
+  clearTimeout(reconnectTimer);
+  reconnectTimer = null;
+  if (socket && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)) {
+    const oldSocket = socket;
+    socket = null;
+    try {
+      oldSocket.close();
+    } catch {}
+  }
   const protocol = location.protocol === "https:" ? "wss:" : "ws:";
-  socket = new WebSocket(`${protocol}//${location.host}/game-ws?playerId=${encodeURIComponent(myId)}`);
-  socket.addEventListener("open", () => {
+  const ws = new WebSocket(`${protocol}//${location.host}/game-ws?playerId=${encodeURIComponent(myId)}`);
+  socket = ws;
+  ws.addEventListener("open", () => {
+    if (socket !== ws) return;
     clearInterval(heartbeatTimer);
-    heartbeatTimer = setInterval(() => socket.readyState === WebSocket.OPEN && socket.send(JSON.stringify({ type: "heartbeat" })), 10_000);
+    clearInterval(connectionWatchTimer);
+    reconnectAttempts = 0;
+    lastServerMessageAt = Date.now();
+    lastHeartbeatAckAt = Date.now();
+    sendHeartbeat();
+    heartbeatTimer = setInterval(sendHeartbeat, HEARTBEAT_INTERVAL_MS);
+    connectionWatchTimer = setInterval(watchConnection, 1000);
+    resendPendingClientMessages(true);
   });
-  socket.addEventListener("close", () => clearInterval(heartbeatTimer));
-  socket.addEventListener("message", (event) => {
+  ws.addEventListener("close", () => {
+    if (socket !== ws) return;
+    clearInterval(heartbeatTimer);
+    clearInterval(connectionWatchTimer);
+    scheduleReconnect();
+  });
+  ws.addEventListener("error", () => {
+    if (socket === ws) scheduleReconnect();
+  });
+  ws.addEventListener("message", (event) => {
+    if (socket !== ws) return;
     const message = JSON.parse(event.data);
-    if (animationDepth > 0 && message.type !== "round_pause") {
+    lastServerMessageAt = Date.now();
+    if (message.type === "heartbeat_ack") {
+      lastHeartbeatAckAt = Date.now();
+      return;
+    }
+    if (message.type === "operation_ack") {
+      handleOperationAck(message.body);
+      return;
+    }
+    const immediateTypes = new Set(["game_init", "round_pause", "set_round_timer"]);
+    if (animationDepth > 0 && !immediateTypes.has(message.type)) {
       queuedMessages.push(message);
       return;
     }
     dispatchMessage(message);
   });
+}
+
+function sendHeartbeat() {
+  if (socket?.readyState !== WebSocket.OPEN) return;
+  socket.send(JSON.stringify({ type: "heartbeat", clientTime: Date.now() }));
+}
+
+function watchConnection() {
+  const now = Date.now();
+  resendPendingClientMessages(false);
+  if (socket?.readyState !== WebSocket.OPEN) return;
+  if (now - lastHeartbeatAckAt > HEARTBEAT_ACK_TIMEOUT_MS || now - lastServerMessageAt > SERVER_SILENCE_TIMEOUT_MS) {
+    scheduleReconnect();
+  }
+}
+
+function scheduleReconnect() {
+  clearInterval(heartbeatTimer);
+  clearInterval(connectionWatchTimer);
+  if (reconnectTimer) return;
+  const delay = Math.min(5000, 400 + reconnectAttempts * 600);
+  reconnectAttempts += 1;
+  reconnectTimer = setTimeout(() => {
+    reconnectTimer = null;
+    connectGameSocket();
+  }, delay);
+  try {
+    if (socket && socket.readyState !== WebSocket.CLOSED) socket.close();
+  } catch {}
+}
+
+function sendGameMessage(type, body = {}, { reliable = true } = {}) {
+  const message = { type, ...body };
+  if (!reliable) {
+    if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify(message));
+    return null;
+  }
+  const id = `${Date.now()}-${++clientMessageSeq}`;
+  message.clientMessageId = id;
+  pendingClientMessages.set(id, { message, sentAt: 0, attempts: 0 });
+  transmitClientMessage(id);
+  return id;
+}
+
+function transmitClientMessage(id) {
+  const entry = pendingClientMessages.get(id);
+  if (!entry || socket?.readyState !== WebSocket.OPEN) return;
+  entry.sentAt = Date.now();
+  entry.attempts += 1;
+  socket.send(JSON.stringify(entry.message));
+}
+
+function resendPendingClientMessages(force = false) {
+  const now = Date.now();
+  for (const [id, entry] of pendingClientMessages) {
+    if (force || now - entry.sentAt >= RELIABLE_RESEND_MS) transmitClientMessage(id);
+    if (entry.attempts >= 6 && now - entry.sentAt >= RELIABLE_RESEND_MS) scheduleReconnect();
+  }
+}
+
+function handleOperationAck(body = {}) {
+  if (!body.id) return;
+  pendingClientMessages.delete(body.id);
 }
 
 function dispatchMessage(message) {
@@ -228,6 +339,15 @@ function flushQueuedMessages() {
 
 function renderInit(data) {
   myId = data.playerId || myId;
+  forceEndCurrentAnimation();
+  closeTopOverlay(false);
+  if (propDialog.open) propDialog.close();
+  document.querySelector("#bidPanel").hidden = true;
+  pendingTargetUse = null;
+  rectangleSelection = null;
+  pendingPeepRect = null;
+  proxyPropUse = null;
+  renderer.clearTemporaryCells();
   propDefinitions = data.propDefinitions || {};
   characterDefinitions = data.characterDefinitions || {};
   carriedProps = data.carriedProps || [];
@@ -563,7 +683,7 @@ function showSettlement(body) {
 
 function handleSettlementSellResult(body) {
   alert(`\u51fa\u552e\u83b7\u5f97\u4e86 ${formatNumber(body.total || 0)}`);
-  socket?.send(JSON.stringify({ type: "return_room" }));
+  sendGameMessage("return_room");
 }
 
 function buildSettlementRarityFilter() {
@@ -720,7 +840,7 @@ function showMegumiChoice(body) {
   topOverlay.querySelectorAll("[data-choice]").forEach((button) => {
     button.addEventListener("click", () => {
       if (button.disabled) return;
-      socket?.send(JSON.stringify({ type: "megumi_choice", choice: button.dataset.choice }));
+      sendGameMessage("megumi_choice", { choice: button.dataset.choice });
       closeTopOverlay();
     });
   });
@@ -752,7 +872,7 @@ function showMegumiPrediction(body, { closable = true } = {}) {
     });
   });
   topOverlay.querySelector("#submitPredictionButton")?.addEventListener("click", () => {
-    socket?.send(JSON.stringify({ type: "megumi_prediction", predictions }));
+    sendGameMessage("megumi_prediction", { predictions });
     predictionSubmittedThisRound = true;
     updateActionButtons();
     closeTopOverlay();
@@ -830,7 +950,7 @@ async function submitSecretWord() {
   secretWordState.submitted = true;
   updateActionButtons();
   closeTopOverlay(false);
-  socket?.send(JSON.stringify({ type: "secret_word_submit", hash }));
+  sendGameMessage("secret_word_submit", { hash });
 }
 
 async function sha256Hex(text) {
@@ -965,7 +1085,7 @@ function showOtosakaTargetDialog() {
       closeTopOverlay(false);
       renderer.clearTemporaryCells();
       if (ok && pendingPeepRect && targetId) {
-        socket?.send(JSON.stringify({ type: "otosaka_peep", rect: pendingPeepRect, targetPlayerId: targetId }));
+        sendGameMessage("otosaka_peep", { rect: pendingPeepRect, targetPlayerId: targetId });
         otosakaState.peepUsed = true;
         updateActionButtons();
       }
@@ -1073,7 +1193,7 @@ function sendUseProp(slot, target = null) {
   if (propUsePending || hasBidThisRound || actionLockedThisRound || propUseLocked || animationDepth > 0) return;
   propUsePending = true;
   updateActionButtons();
-  socket?.send(JSON.stringify({ type: "use_prop", slot, target }));
+  sendGameMessage("use_prop", { slot, target });
 }
 
 function completeTargetUse(cell) {
@@ -1081,7 +1201,7 @@ function completeTargetUse(cell) {
   pendingTargetUse = null;
   if (!pending) return;
   if (pending.mode === "otosaka_defend") {
-    socket?.send(JSON.stringify({ type: "otosaka_defend", target: cell }));
+    sendGameMessage("otosaka_defend", { target: cell });
     otosakaState.defendUsed = true;
     updateActionButtons();
     return;
@@ -1095,7 +1215,7 @@ function completeTargetUse(cell) {
 
 function sendOtosakaProxyProp(targetPlayerId, slot, target = null) {
   proxyPropUse = null;
-  socket?.send(JSON.stringify({ type: "otosaka_proxy_prop", targetPlayerId, slot, target }));
+  sendGameMessage("otosaka_proxy_prop", { targetPlayerId, slot, target });
 }
 
 function requiresTarget(id) {
@@ -1117,7 +1237,7 @@ async function sendBid(amount, { skipPredictionConfirm = false } = {}) {
   hasBidThisRound = true;
   updateActionButtons();
   if (propDialog.open) propDialog.close();
-  socket?.send(JSON.stringify({ type: "bid", amount: value }));
+  sendGameMessage("bid", { amount: value });
 }
 
 function updateActionButtons() {
@@ -1165,7 +1285,7 @@ function rebuildActiveSkills() {
       disabled: !canUseReinerTransform(),
       run: () => {
         if (!canUseReinerTransform()) return;
-        socket?.send(JSON.stringify({ type: "reiner_transform" }));
+        sendGameMessage("reiner_transform");
       },
     });
   }
@@ -1248,7 +1368,9 @@ async function playAnimationSequence(animations, { queueMessages = true } = {}) 
   try {
     for (const animation of animations) {
       if (token !== animationRunToken) break;
-      await playSingleAnimation(Number(animation.id), Number(animation.durationSeconds || animationDurations[animation.id] || 1), token);
+      const durationSeconds = Number(animation.durationSeconds || animationDurations[animation.id] || 1);
+      const deadline = Date.now() + Math.max(0.1, durationSeconds) * 1000;
+      await playSingleAnimation(Number(animation.id), durationSeconds, token, deadline);
     }
   } finally {
     if (queueMessages) animationDepth = Math.max(0, animationDepth - 1);
@@ -1272,54 +1394,62 @@ function showTimedOverlay(text, seconds) {
   });
 }
 
-async function playSingleAnimation(id, durationSeconds, token = animationRunToken) {
+async function playSingleAnimation(id, durationSeconds, token = animationRunToken, deadline = Date.now() + durationSeconds * 1000) {
   stopCurrentAnimation();
   if (token !== animationRunToken) return;
   const overlay = createAnimationOverlay();
   showAnimationLoading(overlay, id);
   if (id === 1 || id === 2 || id === 3 || id === 6 || id === 8 || id === 9 || id === 11) {
     const className = id === 1 || id === 2 || id === 3 || id === 11 ? "fullscreen-animation" : "centered-webp";
-    const [img, audio] = await Promise.all([
+    const loaded = await withAnimationDeadline(Promise.all([
       createLoadedAnimationImage(animationImageSrc(id), className, { freshObjectUrl: true }),
       createReadyAnimationAudio(id),
-    ]);
+    ]), deadline, token);
+    if (!loaded) return;
+    const [img, audio] = loaded;
     if (token !== animationRunToken) return;
     overlay.innerHTML = `<div class="webp-center-stage"></div>`;
     overlay.querySelector(".webp-center-stage").appendChild(img);
     await startPreparedAnimationAudio(audio);
-    return wait(durationSeconds * 1000);
+    return waitUntilAnimationDeadline(deadline);
   }
   if (id === 7) {
-    const [img, audio] = await Promise.all([
+    const loaded = await withAnimationDeadline(Promise.all([
       createLoadedAnimationImage(animationImageSrc(7), "slide-image-from-left"),
       createReadyAnimationAudio(id),
-    ]);
+    ]), deadline, token);
+    if (!loaded) return;
+    const [img, audio] = loaded;
     if (token !== animationRunToken) return;
     const imageWidth = window.innerHeight * (img.naturalWidth / img.naturalHeight || 1);
     img.style.setProperty("--image-width", `${imageWidth}px`);
     overlay.replaceChildren(img);
     await startPreparedAnimationAudio(audio);
-    return wait(durationSeconds * 1000);
+    return waitUntilAnimationDeadline(deadline);
   }
   if (id === 10) {
-    const [leftImg, rightImg, audio] = await Promise.all([
+    const loaded = await withAnimationDeadline(Promise.all([
       createLoadedAnimationImage(animationImageSrc("10_1"), "duel-piece duel-left"),
       createLoadedAnimationImage(animationImageSrc("10_2"), "duel-piece duel-right"),
       createReadyAnimationAudio(id),
-    ]);
+    ]), deadline, token);
+    if (!loaded) return;
+    const [leftImg, rightImg, audio] = loaded;
     if (token !== animationRunToken) return;
     const stage = document.createElement("div");
     stage.className = "duel-stage";
     stage.append(leftImg, rightImg);
     overlay.replaceChildren(stage);
     await startPreparedAnimationAudio(audio);
-    return wait(durationSeconds * 1000);
+    return waitUntilAnimationDeadline(deadline);
   }
   if (id === 4) {
-    const [img, audio] = await Promise.all([
+    const loaded = await withAnimationDeadline(Promise.all([
       createLoadedAnimationImage(animationImageSrc(4), "slide-animation-image"),
       createReadyAnimationAudio(id),
-    ]);
+    ]), deadline, token);
+    if (!loaded) return;
+    const [img, audio] = loaded;
     if (token !== animationRunToken) return;
     const imageWidth = window.innerHeight * (img.naturalWidth / img.naturalHeight || 1);
     img.style.setProperty("--image-width", `${imageWidth}px`);
@@ -1327,29 +1457,51 @@ async function playSingleAnimation(id, durationSeconds, token = animationRunToke
     dim.className = "animation-dim-layer";
     overlay.replaceChildren(dim, img);
     await startPreparedAnimationAudio(audio);
-    return wait(durationSeconds * 1000);
+    return waitUntilAnimationDeadline(deadline);
   }
   if (id === 5) {
-    const [img, audio] = await Promise.all([
+    const loaded = await withAnimationDeadline(Promise.all([
       createLoadedAnimationImage(animationImageSrc(5), "fade-center-animation-image", { freshObjectUrl: true }),
       createReadyAnimationAudio(id),
-    ]);
+    ]), deadline, token);
+    if (!loaded) return;
+    const [img, audio] = loaded;
     if (token !== animationRunToken) return;
     const dim = document.createElement("div");
     dim.className = "animation-dim-layer";
     overlay.replaceChildren(dim, img);
     setTimeout(() => currentAnimationOverlay === overlay && startPreparedAnimationAudio(audio), 500);
-    return wait(durationSeconds * 1000);
+    return waitUntilAnimationDeadline(deadline);
   }
   if (id === 12) {
-    const img = await createLoadedAnimationImage(animationImageSrc(12), "fade-center-animation-image", { freshObjectUrl: true });
+    const img = await withAnimationDeadline(createLoadedAnimationImage(animationImageSrc(12), "fade-center-animation-image", { freshObjectUrl: true }), deadline, token);
+    if (!img) return;
     if (token !== animationRunToken) return;
     const dim = document.createElement("div");
     dim.className = "animation-dim-layer";
     overlay.replaceChildren(dim, img);
-    return wait(durationSeconds * 1000);
+    return waitUntilAnimationDeadline(deadline);
   }
-  return wait(durationSeconds * 1000);
+  return waitUntilAnimationDeadline(deadline);
+}
+
+async function withAnimationDeadline(promise, deadline, token) {
+  const remaining = Math.max(0, deadline - Date.now());
+  if (!remaining || token !== animationRunToken) return null;
+  const timedOut = Symbol("animation-timeout");
+  const result = await Promise.race([
+    promise.catch(() => timedOut),
+    wait(remaining).then(() => timedOut),
+  ]);
+  if (result === timedOut || token !== animationRunToken) {
+    if (token === animationRunToken) stopCurrentAnimation();
+    return null;
+  }
+  return result;
+}
+
+function waitUntilAnimationDeadline(deadline) {
+  return wait(Math.max(0, deadline - Date.now()));
 }
 
 function createAnimationOverlay() {

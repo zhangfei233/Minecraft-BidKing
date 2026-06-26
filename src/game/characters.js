@@ -34,7 +34,7 @@ export class SteveCharacter extends Character {
       .filter(({ item }) => !itemOutlineKnown(view, item) && splitTypes(item.type).some((type) => picked.has(type)))
       .map(({ index }) => index);
     return itemPackage(warehouse, viewNumber, {
-      text: `抽取${pickedTypes.length}个类别，显示所有包含这些类别的战利品轮廓`,
+      text: `抽取${pickedTypes.length}个类别，显示所有包含这些类别的战利品轮廓。`,
       indexes,
       hintType: "item_outline",
     });
@@ -46,7 +46,7 @@ export class SteveCharacter extends Character {
         ? realItems(warehouse).filter(({ item }) => !itemOutlineKnown(view, item)).map(({ index }) => index)
         : realItems(warehouse).filter(({ item }) => itemRarityKnown(view, item) && !itemOutlineKnown(view, item)).map(({ index }) => index);
     return itemPackage(warehouse, viewNumber, {
-      text: round === 5 ? "显示所有战利品的轮廓" : `显示${indexes.length}件已知品质战利品的轮廓`,
+      text: round === 5 ? "显示所有战利品的轮廓。" : `显示${indexes.length}件已知品质战利品的轮廓。`,
       indexes,
       hintType: "item_outline",
     });
@@ -55,11 +55,11 @@ export class SteveCharacter extends Character {
 
 export class AlexCharacter extends Character {
   onGameStart({ warehouse, viewNumber, view, random }) {
-    return revealUnknownRarity(warehouse, viewNumber, view, 5, random, "显示5件不同战利品的品质");
+    return revealUnknownRarity(warehouse, viewNumber, view, 5, random, "显示5件不同战利品的品质。");
   }
 
   onRoundStart({ warehouse, viewNumber, view, random }) {
-    return revealUnknownRarity(warehouse, viewNumber, view, 2, random, "揭示2件品质未知战利品的品质");
+    return revealUnknownRarity(warehouse, viewNumber, view, 2, random, "揭示2件品质未知战利品的品质。");
   }
 }
 
@@ -76,14 +76,14 @@ class SequentialTypeCharacter extends Character {
       .filter(({ item }) => !itemFullInfoKnown(view, item))
       .map(({ index }) => index);
     const fullCount = Math.ceil(indexes.length / 3);
-    if (round === 1) return textPackage(`所有${this.typeLabel}类战利品的数量为${indexes.length}`);
+    if (round === 1) return textPackage(`所有${this.typeLabel}类战利品的数量为${indexes.length}。`);
     if (round === 2) {
-      return itemPackage(warehouse, viewNumber, { text: `显示所有${this.typeLabel}类战利品的轮廓`, indexes, hintType: "item_outline" });
+      return itemPackage(warehouse, viewNumber, { text: `显示所有${this.typeLabel}类战利品的轮廓。`, indexes, hintType: "item_outline" });
     }
-    if (round === 3) return rarityPackage(warehouse, viewNumber, indexes, `显示所有${this.typeLabel}类战利品的品质`);
+    if (round === 3) return rarityPackage(warehouse, viewNumber, indexes, `显示所有${this.typeLabel}类战利品的品质。`);
     if (round === 4 || round === 5) {
       return itemPackage(warehouse, viewNumber, {
-        text: `显示1/3${this.typeLabel}类战利品的完整信息`,
+        text: `显示1/3${this.typeLabel}类战利品的完整信息。`,
         indexes: sample(fullCandidates, fullCount, random),
         hintType: "item_full",
       });
@@ -96,7 +96,7 @@ export class HarperCharacter extends Character {
   onGameStart({ warehouse, viewNumber }) {
     const indexes = itemsWithRarities(warehouse, ["gray", "green", "blue"]).map(({ index }) => index);
     const total = indexes.reduce((sum, index) => sum + Number(warehouse.getItemByIndex(index)?.price || 0), 0);
-    const hint = rarityPackage(warehouse, viewNumber, indexes, `白色、绿色和蓝色品质战利品的总价值为${total}`);
+    const hint = rarityPackage(warehouse, viewNumber, indexes, `白色、绿色和蓝色品质战利品的总价值为${total}。`);
     hint.show = hint.message.length > 0;
     return hint;
   }
@@ -108,7 +108,7 @@ export class JesseCharacter extends Character {
     if (!rarity || round > 4) return null;
     const indexes = itemsWithRarities(warehouse, [rarity]).map(({ index }) => index);
     return itemPackage(warehouse, viewNumber, {
-      text: `显示所有${RARITY_LABELS[rarity]}色品质战利品的轮廓和品质`,
+      text: `显示所有${RARITY_LABELS[rarity]}色品质战利品的轮廓和品质。`,
       indexes,
       hintType: "item_outline_rarity",
     });
@@ -117,16 +117,16 @@ export class JesseCharacter extends Character {
 
 export class IsaCharacter extends Character {
   onGameStart({ warehouse }) {
-    const count = itemsWithRarities(warehouse, ["purple", "gold", "red"]).length;
-    return textPackage(`紫色、金色和红色品质战利品的数量之和为${count}`);
+    const count = itemsWithRarities(warehouse, ["blue", "purple", "gold", "red"]).length;
+    return textPackage(`蓝色、紫色、金色和红色品质战利品的数量之和为${count}。`);
   }
 }
 
 export class IvorCharacter extends Character {
   onRoundStart({ warehouse, viewNumber, round }) {
     const indexes = realItems(warehouse).map(({ index }) => index);
-    if (round === 4) return itemPackage(warehouse, viewNumber, { text: "显示所有战利品的轮廓", indexes, hintType: "item_outline" });
-    if (round === 5) return rarityPackage(warehouse, viewNumber, indexes, "显示所有战利品的品质");
+    if (round === 4) return itemPackage(warehouse, viewNumber, { text: "显示所有战利品的轮廓。", indexes, hintType: "item_outline" });
+    if (round === 5) return rarityPackage(warehouse, viewNumber, indexes, "显示所有战利品的品质。");
     return null;
   }
 }
@@ -134,44 +134,46 @@ export class IvorCharacter extends Character {
 export class LukasCharacter extends Character {
   onGameStart({ warehouse, viewNumber }) {
     const indexes = itemsWithAnyType(warehouse, ["tool", "equipment"]).map(({ index }) => index);
-    return itemPackage(warehouse, viewNumber, { text: "显示所有工具类和装备类战利品的轮廓", indexes, hintType: "item_outline" });
+    return itemPackage(warehouse, viewNumber, { text: "显示所有工具类和装备类战利品的轮廓。", indexes, hintType: "item_outline" });
   }
 
   onRoundStart({ warehouse, viewNumber, view, random }) {
     const candidates = itemsWithAnyType(warehouse, ["tool", "equipment"])
       .filter(({ item }) => !itemRarityKnown(view, item))
       .map(({ index }) => index);
-    return rarityPackage(warehouse, viewNumber, sample(candidates, 1, random), "揭示一件工具或装备类战利品的品质");
+    return rarityPackage(warehouse, viewNumber, sample(candidates, 1, random), "揭示一件工具或装备类战利品的品质。");
   }
 }
 
 export class MeviaCharacter extends Character {
   onGameStart({ warehouse, viewNumber }) {
     const indexes = itemsWithAnyType(warehouse, ["food"]).map(({ index }) => index);
-    return itemPackage(warehouse, viewNumber, { text: "显示所有食物类战利品的轮廓", indexes, hintType: "item_outline" });
+    return itemPackage(warehouse, viewNumber, { text: "显示所有食物类战利品的轮廓。", indexes, hintType: "item_outline" });
   }
 
   onRoundStart({ warehouse, viewNumber, view, random }) {
     const natural = itemsWithAnyType(warehouse, ["natural"]).filter(({ item }) => !itemRarityKnown(view, item)).map(({ index }) => index);
-    if (natural.length) return rarityPackage(warehouse, viewNumber, sample(natural, 1, random), "显示1个品质未知的自然类战利品的品质");
+    if (natural.length) return rarityPackage(warehouse, viewNumber, sample(natural, 1, random), "显示1个品质未知的自然类战利品的品质。");
     const [index] = randomItemIndexes(warehouse, (item) => !itemRarityKnown(view, item) || !itemOutlineKnown(view, item), 1, random);
-    return itemPackage(warehouse, viewNumber, { text: "没有符合条件的自然类战利品，改为显示1个随机战利品的品质和轮廓", indexes: index ? [index] : [], hintType: "item_outline_rarity" });
+    return itemPackage(warehouse, viewNumber, { text: "没有符合条件的自然类战利品，改为显示1个随机战利品的品质和轮廓。", indexes: index ? [index] : [], hintType: "item_outline_rarity" });
   }
 }
 
 export class OttoCharacter extends Character {
   onGameStart({ warehouse, viewNumber }) {
     const indexes = itemsWithAnyType(warehouse, ["ore"]).map(({ index }) => index);
-    return itemPackage(warehouse, viewNumber, { text: "显示所有矿物类战利品的轮廓和品质", indexes, hintType: "item_outline_rarity" });
+    return itemPackage(warehouse, viewNumber, { text: "显示所有矿物类战利品的轮廓和品质。", indexes, hintType: "item_outline_rarity" });
   }
 }
 
 export class PetraCharacter extends Character {
-  onRoundStart({ warehouse, viewNumber, view, random }) {
+  onRoundStart({ warehouse, viewNumber, view, random, round }) {
     const indexes = realItems(warehouse)
       .filter(({ item }) => !itemOutlineKnown(view, item) && !itemRarityKnown(view, item))
+      .filter(({ item }) => round > 2 || !["gray", "green"].includes(item.rarity))
       .map(({ index }) => index);
-    return itemPackage(warehouse, viewNumber, { text: "显示两个完全未知战利品的轮廓和品质", indexes: sample(indexes, 2, random), hintType: "item_outline_rarity" });
+    const prefix = round <= 2 ? "排除白色和绿色品质，" : "";
+    return itemPackage(warehouse, viewNumber, { text: `${prefix}显示两个完全未知战利品的轮廓和品质。`, indexes: sample(indexes, 2, random), hintType: "item_outline_rarity" });
   }
 }
 
@@ -181,7 +183,7 @@ export class GojoCharacter extends Character {
   onGameStart({ state }) {
     state.mode = "blue";
     state.redTriggered = false;
-    return textPackage("进入【苍】阶段");
+    return textPackage("进入【苍】阶段。");
   }
 
   onRoundStart({ warehouse, viewNumber, view, player, players, state, round, random }) {
@@ -193,19 +195,19 @@ export class GojoCharacter extends Character {
       const allBids = players.map((entry) => entry.bids[previousRound] ?? 0);
       if (state.mode === "blue" && bid === Math.max(...allBids)) {
         const indexes = itemsWithRarities(warehouse, ["blue"]).map(({ index }) => index);
-        hints.push(itemPackage(warehouse, viewNumber, { text: "【苍】效果触发，随机显示一半蓝色战利品，并进入【赫】阶段", indexes: sample(indexes, Math.ceil(indexes.length / 2), random), hintType: "item_full" }));
+        hints.push(itemPackage(warehouse, viewNumber, { text: "【苍】效果触发，随机显示一半蓝色战利品，并进入【赫】阶段。", indexes: sample(indexes, Math.ceil(indexes.length / 2), random), hintType: "item_full" }));
         state.mode = "red";
-        hints.push(textPackage("进入【赫】阶段"));
+        hints.push(textPackage("进入【赫】阶段。"));
       } else if (state.mode === "red" && bid === Math.min(...allBids)) {
         const index = pickHighestAvailableRarityItem(warehouse, view, random);
-        hints.push(itemPackage(warehouse, viewNumber, { text: "【赫】效果触发，随机显示一个高品质战利品，并进入【苍】阶段", indexes: index ? [index] : [], hintType: "item_full" }));
+        hints.push(itemPackage(warehouse, viewNumber, { text: "【赫】效果触发，随机显示一个高品质战利品，并进入【苍】阶段。", indexes: index ? [index] : [], hintType: "item_full" }));
         state.redTriggered = true;
         state.mode = "blue";
-        hints.push(textPackage("进入【苍】阶段"));
+        hints.push(textPackage("进入【苍】阶段。"));
       }
     }
     if (round === 5 && state.redTriggered) {
-      hints.push(itemPackage(warehouse, viewNumber, { text: "第五回合效果发动，显示所有紫色品质战利品", indexes: itemsWithRarities(warehouse, ["purple"]).map(({ index }) => index), hintType: "item_full" }));
+      hints.push(itemPackage(warehouse, viewNumber, { text: "第五回合效果发动，显示所有紫色品质战利品。", indexes: itemsWithRarities(warehouse, ["purple"]).map(({ index }) => index), hintType: "item_full" }));
     }
     return hints;
   }
@@ -234,6 +236,8 @@ export function createCharacter(id, definition = {}) {
     character_19: Character,
     character_20: Character,
     character_21: Character,
+    character_22: Character,
+    character_23: Character,
   };
   const ClassName = map[id] || Character;
   return new ClassName(definition);

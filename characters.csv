@@ -5,20 +5,20 @@ character_3,Axel,每回合依次显示所有生物类(mob)战利品的数量、�
 character_4,Hadrian,每回合依次显示所有装饰类(decoration)战利品的数量、轮廓、稀有度、1/3装饰类战利品的完整信息。,/resource/characters/Hadrian.png
 character_5,Harper,开局显示所有稀有度为白色，绿色和蓝色的战利品的稀有度和总价值。,/resource/characters/Harper.png
 character_6,Jesse,前四回合开始时依次显示白、绿、蓝、紫稀有度的战利品的轮廓和稀有度。,/resource/characters/Jesse.png
-character_7,Isa,开局显示所有稀有度为紫色，金色和红色的战利品的数量之和,/resource/characters/Isa.png
+character_7,Isa,开局显示所有稀有度为蓝色，紫色，金色和红色的战利品的数量之和,/resource/characters/Isa.png
 character_8,Ivor,第四回合开始时，显示所有战利品的轮廓。第五回合开始时，显示所有战利品的稀有度,/resource/characters/Ivor.png
 character_9,Lukas,开局显示所有工具类(tool)和装备类(equipment)的战利品的轮廓，每回合揭示其中一件未知稀有度的战利品的稀有度,/resource/characters/Lukas.png
 character_10,Mevia,开局显示所有食物类(food)战利品的轮廓。每回合显示1个稀有度未知的自然类(natural)战利品的稀有度，若没有则改为1个随机战利品的稀有度和轮廓,/resource/characters/Mevia.png
 character_11,Olivia,每回合依次显示所有科技类(tech)战利品的数量、轮廓、稀有度、1/3科技类战利品的完整信息,/resource/characters/Olivia.png
 character_12,Otto,开局显示所有矿物类(Ore)战利品的轮廓和稀有度,/resource/characters/Otto.png
-character_13,Petra,每回合显示两个完全未知的战利品的轮廓和稀有度,/resource/characters/Petra.png
+character_13,Petra,每回合显示两个完全未知的战利品的轮廓和稀有度，且前两回合不会选择白色和绿色稀有度的战利品,/resource/characters/Petra.png
 character_14,Sukuna,若你在前三回合的出价均为0，则第四回合的竞价结算时除你以外的出价排行第一名角色的本回合出价视为减半。第五回合开始时，若你拥有信息的战利品数量达到了本次战利品仓物品数的2/3，则使出【伏魔御厨子】：无法抵消此效果的玩家随机清空一半的道具且出价在竞价时视为80%。,/resource/characters/Sukuna.png
 character_15,Gojo,开局显示一件蓝色稀有度战利品并进入【苍】阶段。第五回合，如果已经触发过【茈】的效果，则使出【无量空处】。【苍】：若你出价最高则显示所有与完全已知的战利品相邻的战利品并进入【赫】阶段；【赫】：若你出价最低则随机显示一个红色稀有度战利品(没有则稀有度向下顺延)并进入【茈】阶段。【茈】：若你出价最高则显示所有紫色稀有度战利品以及与它们相邻的战利品。【无量空处】：无法抵消此效果的玩家无法出价或使用道具，且出价强制与其上回合相同,/resource/characters/Gojo.png
-character_16,Luxun, 你每回合可以使用两次道具。若你当回合出价与前一回合一致，你随机获得X件临时道具(X为你当前出价连续一致的回合数，但无法超过空道具槽数量)。,/resource/characters/Luxun.png
-character_17,Creeper,有其他角色的出价在你的出价的90%-110%区间内的回合每累积两个，你在有空道具槽时获得临时专属道具【TNT】1个。,/resource/characters/Creeper.png
+character_16,Luxun, 你每回合可以使用两次道具。第二回合开始时，随机获得一件临时道具。若你当回合出价与前一回合一致，你随机获得X件临时道具(X为你当前出价连续一致的回合数，但无法超过空道具槽数量)。,/resource/characters/Luxun.png
+character_17,Creeper,有其他角色的出价在你的出价的85%-115%区间内的回合每累积两个，你在有空道具槽时获得临时专属道具【TNT】1个。,/resource/characters/Creeper.png
 character_18,Quantum,奇数回合开始时，若你未持有专属道具，将你的一个随机道具替换为临时专属道具【复制机】。,/resource/characters/Quantum.png
 character_19,RaidCap,若你的出价不为全场最低，出价比你高的玩家下回合获得持续一回合的”不详之兆”：出价在竞价时视为减少5X%(X为该玩家本局不祥之兆持续过的回合数)。,/resource/characters/RaidCap.png
 character_20,Pucci,开局时系统选取本次的一件战利品作为目标。每回合开始时，依次获知目标战利品的类别/尺寸/稀有度/名称，然后若你未持有专属道具，你获得专属道具【新月】。发动新月寻找目标战利品，首次成功定位则开启【天堂制造】令本局剩余回合的时间减半，并使你的出价在竞价时视为1.3倍。若第五回合发动新月仍然未能找到目标，则可以用密语补救但倍率只有1.2倍。“MADE IN HEAVEN!”,/resource/characters/Pucci.png
-character_21,Megumi,第二回合开始时你选择一项："领域展开"或"跟你爆了"。领域展开：以上一回合其他玩家出价的最高和最低值为开区间的端点，你本局此后的出价如果包含在该区间内，则竞价时视为出价的120%。 跟你爆了：将角色替换为魔虚罗，魔虚罗每回合猜测所有其他玩家本回合的出价比其上回合的出价更高/不变/更低，如果你猜对，本局游戏中你对其累积5%的优势。,/resource/characters/Megumi.png
+character_21,Megumi,第二回合开始时你选择一项："领域展开"或"跟你爆了"。领域展开：以上一回合其他玩家出价的最高和最低值为开区间的端点，你本局此后的出价如果包含在该区间内，则竞价时视为出价的120%。 跟你爆了：将角色替换为魔虚罗，魔虚罗每回合猜测所有其他玩家本回合的出价比其上回合的出价更高/不变/更低，如果你猜对，本局游戏中你对其累积5X%的优势（X为猜对该目标的次数）。,/resource/characters/Megumi.png
 character_22,Reiner,莱纳：每局游戏限一次，回合的前一半时间，你可以选择变身为铠之巨人，若如此做，显示所有占格数大于9的战利品的轮廓，并且向全体玩家揭示其中价值最高的战利品。变身后你的出价视为(1.6-X/10)倍（X为当前回合数），但每回合每有一名玩家的出价大于你则为你“准备一把椅子”，若你最终得拍，则将等量随机战利品替换成椅子。,/resource/characters/Reiner.png
-character_23,Otosaka,每回合限一次，回合的后一半时间，你可以选定战利品仓的一片矩形区域并选择一名其他角色，短暂夺舍该角色：获取该角色在该区域内的全部战利品信息，若技能发动时所选的角色本回合未使用道具，你可以代替其使用一件道具并记住该道具带来的信息。若你成功夺舍某名角色至少两次并且从其视角窥视的全部未知区域的总格数超过本次战利品仓有效格数的一半，你掠夺其能力。其他角色每回合前一半的时间内可以申请学生会的支援，对指定的一格进行布防，你一旦窥视到布防区域则此次夺舍失败且获得持续整局的-5%竞价倍率, /resource/characters/Otosaka.png
+character_23,Otosaka,每回合限一次，回合的后一半时间，你可以选定战利品仓的一片矩形区域并选择一名其他角色，短暂夺舍该角色：获取该角色在该区域内的全部战利品信息，若技能发动时所选的角色本回合未使用道具，你可以代替其使用一件道具并记住该道具带来的信息。若你成功夺舍某名角色至少两次并且从其视角窥视的全部未知区域的总格数超过本次战利品仓有效格数的1/3，你掠夺其能力。其他角色每回合前一半的时间内可以申请学生会的支援，对指定的一格进行布防，你一旦窥视到布防区域则此次夺舍失败且获得持续整局的-5%竞价倍率, /resource/characters/Otosaka.png
